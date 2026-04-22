@@ -30,6 +30,7 @@
 #define LHA_PATH_LEN 256
 #define LHA_PATH_NOTE_LEN 64
 #define LHA_RESULT_LEN 32
+#define LHA_PENDING_MINIMAL ((struct lha_pending_work *)1UL)
 
 static unsigned int max_events = LHA_DEFAULT_MAX_EVENTS;
 module_param(max_events, uint, 0644);
@@ -105,6 +106,7 @@ static atomic64_t lha_seq = ATOMIC64_INIT(0);
 static atomic64_t queued_events = ATOMIC64_INIT(0);
 static atomic64_t stored_events = ATOMIC64_INIT(0);
 static atomic64_t dropped_events = ATOMIC64_INIT(0);
+static atomic64_t file_open_minimal_hits = ATOMIC64_INIT(0);
 
 static const char *const lha_hook_names[] = {
 	[LHA_HOOK_INODE_PERMISSION] = "selinux_inode_permission",
@@ -589,21 +591,13 @@ static int lha_inode_permission_entry(struct kretprobe_instance *ri,
 static int lha_file_open_entry(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
 	struct lha_probe_ctx *ctx = (struct lha_probe_ctx *)ri->data;
-	struct lha_pending_work *pending;
-	struct file *file;
 
-	pending = lha_alloc_pending(LHA_HOOK_FILE_OPEN);
-	ctx->pending = pending;
-	if (!pending)
+	if (!lha_capture_enabled()) {
+		ctx->pending = NULL;
 		return 0;
-
-	file = (struct file *)regs_get_kernel_argument(regs, 0);
-	if (file) {
-		get_file(file);
-		pending->file = file;
-		pending->file_flags = file->f_flags;
 	}
 
+	ctx->pending = LHA_PENDING_MINIMAL;
 	return 0;
 }
 
@@ -637,6 +631,12 @@ static int lha_common_return(struct kretprobe_instance *ri, struct pt_regs *regs
 
 	if (!pending)
 		return 0;
+
+	if (pending == LHA_PENDING_MINIMAL) {
+		atomic64_inc(&file_open_minimal_hits);
+		ctx->pending = NULL;
+		return 0;
+	}
 
 	pending->ret = (int)regs_return_value(regs);
 	pending->ts_exit_ns = ktime_get_ns();
@@ -724,6 +724,7 @@ static int lha_stats_show(struct seq_file *m, void *unused)
 		   "queued_events=%llu\n"
 		   "stored_events=%llu\n"
 		   "dropped_events=%llu\n"
+		   "file_open_minimal_hits=%llu\n"
 		   "inode_permission_nmissed=%d\n"
 		   "file_open_nmissed=%d\n"
 		   "file_permission_nmissed=%d\n",
@@ -732,6 +733,7 @@ static int lha_stats_show(struct seq_file *m, void *unused)
 		   (unsigned long long)atomic64_read(&queued_events),
 		   (unsigned long long)atomic64_read(&stored_events),
 		   (unsigned long long)atomic64_read(&dropped_events),
+		   (unsigned long long)atomic64_read(&file_open_minimal_hits),
 		   lha_inode_permission_probe.nmissed,
 		   lha_file_open_probe.nmissed,
 		   lha_file_permission_probe.nmissed);
