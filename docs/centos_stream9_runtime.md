@@ -146,6 +146,13 @@ make KDIR=/Users/tanruoying/Desktop/codex_chat/centos-stream-9
 sudo insmod lha_centos9_resolver.ko
 ```
 
+模块加载后会创建：
+
+```bash
+/sys/kernel/debug/lha_centos9/inject
+/sys/kernel/debug/lha_centos9/last_json
+```
+
 如果你的抓取模块和 resolver 是分开的，那么典型加载顺序是：
 
 1. 先加载 `lha_centos9_resolver.ko`
@@ -174,6 +181,61 @@ sudo insmod lha_centos9_resolver.ko
 - netlink
 - character device
 - trace buffer
+
+### 6.4 假事件注入验证
+
+为了不依赖真实抓取模块，当前版本额外提供了一个 debugfs 注入入口，可以直接在服务器上验证 resolver 是否能工作。
+
+先确保 debugfs 已挂载：
+
+```bash
+sudo mount -t debugfs none /sys/kernel/debug
+```
+
+然后可以写入以下命令：
+
+```bash
+echo sample_inode | sudo tee /sys/kernel/debug/lha_centos9/inject
+echo sample_open | sudo tee /sys/kernel/debug/lha_centos9/inject
+echo sample_append | sudo tee /sys/kernel/debug/lha_centos9/inject
+```
+
+三条命令分别会构造：
+
+- `sample_inode`
+  - 目标路径：`/tmp`
+  - hook：`selinux_inode_permission`
+  - mask：`MAY_EXEC`
+- `sample_open`
+  - 目标路径：`/etc/hosts`
+  - hook：`selinux_file_open`
+- `sample_append`
+  - 目标路径：`/tmp/lha_inject.log`
+  - hook：`selinux_file_permission`
+  - mask：`MAY_WRITE`
+  - `ret` 会被伪造为 `-EACCES`，用于验证 `runtime_result=deny`
+
+每次注入后，可以读取最近一次生成的 JSON：
+
+```bash
+cat /sys/kernel/debug/lha_centos9/last_json
+```
+
+如果模块工作正常，你会看到一条完整 JSON，里面至少会包含：
+
+- `hook`
+- `subject`
+- `request`
+- `target`
+- `result`
+
+这个入口的定位是：
+
+- 验证 resolver 自身能否正确运行
+- 验证 `task/cred + inode/file` 这条解析链路
+- 验证 JSON 输出格式
+
+它不是正式业务入口，只是为了方便调试和自测。
 
 ## 7. 当前还没完全解决的点
 
