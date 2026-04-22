@@ -35,7 +35,10 @@ struct lha_file_raw {
 };
 
 struct lha_kernel_ops {
-    int (*resolve_current_subject)(uint64_t ts_ns, struct lha_subject_raw *subject);
+    int (*resolve_subject)(const void *task,
+                           const void *cred,
+                           uint64_t ts_ns,
+                           struct lha_subject_raw *subject);
     int (*resolve_inode)(const void *inode, uint64_t ts_ns, struct lha_inode_raw *target);
     int (*resolve_file)(const void *file, uint64_t ts_ns, struct lha_file_raw *target);
     int (*sid_to_context)(uint32_t sid, char *buf, size_t buf_len);
@@ -46,4 +49,3 @@ struct lha_kernel_ops {
 };
 
 #endif
-

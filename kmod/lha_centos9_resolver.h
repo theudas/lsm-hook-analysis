@@ -1,7 +1,9 @@
 #ifndef LHA_CENTOS9_RESOLVER_H
 #define LHA_CENTOS9_RESOLVER_H
 
+#include <linux/cred.h>
 #include <linux/fs.h>
+#include <linux/sched.h>
 #include <linux/types.h>
 
 #define LHA_MAX_COMM_LEN 16
@@ -31,6 +33,10 @@ struct lha_capture_event_v1 {
 	__u16 hook_id;
 	__u64 ts_ns;
 	__s32 ret;
+	struct {
+		struct task_struct *task;
+		const struct cred *cred;
+	} subject;
 	union {
 		struct {
 			struct inode *inode;
@@ -87,6 +93,12 @@ struct lha_enriched_event_v1 {
 };
 
 /*
+ * 外部抓取方必须在 hook 现场为下面这些对象建立稳定引用，再把它们传给 resolver：
+ * - task: 例如 get_task_struct()
+ * - cred: 例如 get_cred()
+ * - inode: 例如 ihold()/igrab()
+ * - file: 例如 get_file()
+ *
  * 该 resolver 设计为在可睡眠的内核上下文中运行，例如 workqueue/kthread。
  * 不建议在原始 hook 回调的任何不可睡眠上下文里直接调用它，因为
  * security_secid_to_secctx()/security_inode_getsecctx()/d_path() 都可能睡眠。
@@ -99,4 +111,3 @@ int lha_centos9_format_json(const struct lha_enriched_event_v1 *event,
 			    size_t buf_len);
 
 #endif
-

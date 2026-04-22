@@ -190,20 +190,22 @@ static int resolve_policy_result(const struct lha_kernel_ops *ops,
 }
 
 static int fill_subject(const struct lha_kernel_ops *ops,
+                        const struct lha_capture_event_v1 *event,
                         uint64_t ts_ns,
                         struct lha_subject_v1 *subject)
 {
     struct lha_subject_raw raw;
 
-    if (ops == NULL || ops->resolve_current_subject == NULL || ops->sid_to_context == NULL ||
-        subject == NULL) {
+    if (ops == NULL || event == NULL || ops->resolve_subject == NULL ||
+        ops->sid_to_context == NULL || subject == NULL ||
+        event->subject.task == NULL || event->subject.cred == NULL) {
         return -EINVAL;
     }
 
     memset(&raw, 0, sizeof(raw));
     memset(subject, 0, sizeof(*subject));
 
-    if (ops->resolve_current_subject(ts_ns, &raw) != 0) {
+    if (ops->resolve_subject(event->subject.task, event->subject.cred, ts_ns, &raw) != 0) {
         return -EINVAL;
     }
     if (ops->sid_to_context(raw.sid, subject->scontext, sizeof(subject->scontext)) != 0) {
@@ -274,7 +276,7 @@ static int resolve_inode_permission(const struct lha_kernel_ops *ops,
     copy_string(out->hook_signature, sizeof(out->hook_signature),
                 "static int selinux_inode_permission(struct inode *inode, int mask)");
 
-    if (fill_subject(ops, event->ts_ns, &out->subject) != 0) {
+    if (fill_subject(ops, event, event->ts_ns, &out->subject) != 0) {
         return -EINVAL;
     }
     if (fill_target_from_inode_raw(ops, &inode, &out->target) != 0) {
@@ -309,7 +311,7 @@ static int resolve_file_open(const struct lha_kernel_ops *ops,
     copy_string(out->hook_signature, sizeof(out->hook_signature),
                 "static int selinux_file_open(struct file *file)");
 
-    if (fill_subject(ops, event->ts_ns, &out->subject) != 0) {
+    if (fill_subject(ops, event, event->ts_ns, &out->subject) != 0) {
         return -EINVAL;
     }
     if (fill_target_from_inode_raw(ops, &file.inode, &out->target) != 0) {
@@ -349,7 +351,7 @@ static int resolve_file_permission(const struct lha_kernel_ops *ops,
     copy_string(out->hook_signature, sizeof(out->hook_signature),
                 "static int selinux_file_permission(struct file *file, int mask)");
 
-    if (fill_subject(ops, event->ts_ns, &out->subject) != 0) {
+    if (fill_subject(ops, event, event->ts_ns, &out->subject) != 0) {
         return -EINVAL;
     }
     if (fill_target_from_inode_raw(ops, &file.inode, &out->target) != 0) {
@@ -389,4 +391,3 @@ int lha_resolve_event(const struct lha_kernel_ops *ops,
         return -EINVAL;
     }
 }
-

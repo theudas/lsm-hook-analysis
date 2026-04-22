@@ -20,8 +20,8 @@
    - 时间戳
 2. 抓取方把这些原始输入交给 resolver
 3. resolver 在 **内核工作线程 / workqueue / kthread** 里继续解析：
-   - `current`
-   - `current_cred()`
+   - hook 现场稳定保存下来的 `task`
+   - hook 现场稳定保存下来的 `cred`
    - `inode` / `file`
    - `scontext`
    - `tcontext`
@@ -61,7 +61,7 @@
 这版 `kmod/` 代码尽量使用 **公开 LSM 接口**，避免强依赖 SELinux 私有内部符号：
 
 - 主体 secid:
-  `security_cred_getsecid(current_cred(), &secid)`
+  `security_cred_getsecid(captured_cred, &secid)`
 - 主体 context:
   `security_secid_to_secctx(secid, &secctx, &len)`
 - 目标 context:
@@ -85,8 +85,8 @@
 `kmod/lha_centos9_resolver.c` 已经实现了：
 
 - 3 个 hook 的路由
-- 从 `current` 读取 `pid/tid/comm`
-- 从 `current_cred()` 读取主体 secid，再转成 `scontext`
+- 从外部传入的稳定 `task` 读取 `pid/tid/comm`
+- 从外部传入的稳定 `cred` 读取主体 secid，再转成 `scontext`
 - 从 `inode` / `file` 读取：
   - `dev`
   - `ino`
@@ -158,6 +158,7 @@ sudo insmod lha_centos9_resolver.ko
 最推荐的方式不是在 hook 原地调用，而是：
 
 1. hook 现场组装 `struct lha_capture_event_v1`
+   同时对 `task/cred/file/inode` 建立稳定引用
 2. 把它丢进工作队列
 3. worker 中调用：
    `lha_centos9_resolve_event()`

@@ -7,13 +7,17 @@
 #include <string.h>
 #include <sys/stat.h>
 
-static int mock_resolve_current_subject(uint64_t ts_ns, struct lha_subject_raw *subject)
+static int mock_resolve_subject(const void *task, const void *cred, uint64_t ts_ns,
+                                struct lha_subject_raw *subject)
 {
+    uintptr_t task_id = (uintptr_t)task;
+    uintptr_t cred_id = (uintptr_t)cred;
+
     (void)ts_ns;
     memset(subject, 0, sizeof(*subject));
-    subject->pid = 4321;
-    subject->tid = 4322;
-    subject->sid = 100;
+    subject->pid = 4300u + (uint32_t)task_id;
+    subject->tid = 5300u + (uint32_t)task_id;
+    subject->sid = 100u + (uint32_t)cred_id;
     snprintf(subject->comm, sizeof(subject->comm), "%s", "demo-task");
     return 0;
 }
@@ -65,6 +69,12 @@ static int mock_sid_to_context(uint32_t sid, char *buf, size_t buf_len)
     switch (sid) {
     case 100:
         context = "u:r:subject_t:s0";
+        break;
+    case 101:
+        context = "u:r:subject_alt_t:s0";
+        break;
+    case 102:
+        context = "u:r:subject_async_t:s0";
         break;
     case 200:
         context = "u:object_r:dir_t:s0";
@@ -123,13 +133,15 @@ static void test_inode_permission(const struct lha_kernel_ops *ops)
     input.hook_id = LHA_HOOK_INODE_PERMISSION;
     input.ts_ns = 111;
     input.ret = 0;
+    input.subject.task = (const void *)1;
+    input.subject.cred = (const void *)1;
     input.args.inode_permission.inode = (const void *)1;
     input.args.inode_permission.mask = LHA_MAY_EXEC;
 
     assert(lha_resolve_event(ops, &input, &output) == 0);
     assert(strcmp(output.hook, "selinux_inode_permission") == 0);
-    assert(output.subject.pid == 4321u);
-    assert(strcmp(output.subject.scontext, "u:r:subject_t:s0") == 0);
+    assert(output.subject.pid == 4301u);
+    assert(strcmp(output.subject.scontext, "u:r:subject_alt_t:s0") == 0);
     assert(strcmp(output.request.obj_type, "dir") == 0);
     assert(strcmp(output.request.perm, "search") == 0);
     assert(strcmp(output.target.tclass, "dir") == 0);
@@ -148,9 +160,13 @@ static void test_file_open(const struct lha_kernel_ops *ops)
     input.hook_id = LHA_HOOK_FILE_OPEN;
     input.ts_ns = 222;
     input.ret = 0;
+    input.subject.task = (const void *)2;
+    input.subject.cred = (const void *)2;
     input.args.file_open.file = (const void *)1;
 
     assert(lha_resolve_event(ops, &input, &output) == 0);
+    assert(output.subject.tid == 5302u);
+    assert(strcmp(output.subject.scontext, "u:r:subject_async_t:s0") == 0);
     assert(strcmp(output.request.perm, "open|read") == 0);
     assert(strcmp(output.target.path, "/data/local/tmp/read.txt") == 0);
     assert(lha_event_to_json(&output, json, sizeof(json)) > 0);
@@ -168,10 +184,13 @@ static void test_file_permission(const struct lha_kernel_ops *ops)
     input.hook_id = LHA_HOOK_FILE_PERMISSION;
     input.ts_ns = 333;
     input.ret = -13;
+    input.subject.task = (const void *)3;
+    input.subject.cred = (const void *)1;
     input.args.file_permission.file = (const void *)2;
     input.args.file_permission.mask = LHA_MAY_WRITE;
 
     assert(lha_resolve_event(ops, &input, &output) == 0);
+    assert(strcmp(output.subject.scontext, "u:r:subject_alt_t:s0") == 0);
     assert(strcmp(output.request.perm, "append") == 0);
     assert(strcmp(output.result.runtime_result, "deny") == 0);
     assert(strcmp(output.result.policy_result, "deny") == 0);
@@ -182,7 +201,7 @@ int main(void)
     struct lha_kernel_ops ops;
 
     memset(&ops, 0, sizeof(ops));
-    ops.resolve_current_subject = mock_resolve_current_subject;
+    ops.resolve_subject = mock_resolve_subject;
     ops.resolve_inode = mock_resolve_inode;
     ops.resolve_file = mock_resolve_file;
     ops.sid_to_context = mock_sid_to_context;

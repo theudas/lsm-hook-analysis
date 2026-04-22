@@ -26,7 +26,7 @@
 - 外部抓取方能稳定把 hook 参数和返回值交给本项目
 - resolver 运行在 hook 之后
 - resolver 仍然可以在内核态访问这些 hook 参数对应的对象
-- `current` 语义以“执行该 hook 当下的当前任务”为准
+- 外部除了 `inode/file` 外，还会传入 hook 当时对应的稳定 `task/cred` 引用
 
 不再讨论“外部抓取是否稳定”这个问题，直接假设它成立。
 
@@ -55,6 +55,7 @@ v1 输入只要求携带：
 - hook 参数
 - hook 最终返回值
 - 事件时间戳
+- 稳定的 `task` / `cred` 引用
 
 建议统一成如下输入结构：
 
@@ -70,6 +71,11 @@ struct lha_capture_event_v1 {
     __u16 hook_id;
     __u64 ts_ns;
     __s32 ret;
+
+    struct {
+        struct task_struct *task;
+        const struct cred *cred;
+    } subject;
 
     union {
         struct {
@@ -99,6 +105,10 @@ struct lha_capture_event_v1 {
   事件时间戳，建议使用 ns 级时间
 - `ret`
   hook 最终返回值
+- `subject.task`
+  hook 现场对应任务的稳定引用
+- `subject.cred`
+  hook 现场对应 cred 的稳定引用
 - `args`
   对应 hook 的原始参数
 
@@ -124,7 +134,7 @@ int lha_resolve_event(const struct lha_capture_event_v1 *in,
 
 ## 6. subject 字段定义
 
-`subject` 表示执行该 hook 的当前任务。
+`subject` 表示执行该 hook 的任务，但它不是在 resolver 运行时再现取的，而是使用外部在 hook 现场稳定保存下来的 `task/cred` 引用。
 
 ### 6.1 pid / tid
 
@@ -140,8 +150,8 @@ int lha_resolve_event(const struct lha_capture_event_v1 *in,
 
 实现来源：
 
-- `pid` 从 `current` 对应任务的 `tgid` 读取
-- `tid` 从 `current` 对应任务的 `pid` 读取
+- `pid` 从传入 `task` 的 `tgid` 读取
+- `tid` 从传入 `task` 的 `pid` 读取
 
 注意：
 
@@ -161,7 +171,7 @@ int lha_resolve_event(const struct lha_capture_event_v1 *in,
 
 实现来源：
 
-- `current->comm`
+- 传入 `task->comm`
 
 ### 6.3 scontext
 
@@ -175,30 +185,18 @@ int lha_resolve_event(const struct lha_capture_event_v1 *in,
 
 实现来源：
 
-1. 先取 `cred_sid(current_cred())`
-2. 再调用 `security_sid_to_context()` 转成 context string
+1. 先从传入 `cred` 取主体 secid/sid
+2. 再调用 secid/sid 转 context 的接口得到 context string
 
 建议内部同时保留 subject sid，便于调试和后续扩展，但 v1 JSON 可以只输出 `scontext`
 
 ### 6.4 关于 current 语义
 
-这里的 `current` 指的是：
+这里的 `subject` 语义是：
 
-- 执行这个 hook 的当下，内核里正在运行的当前任务
+- 外部在 hook 现场抓到并稳定保存下来的 `task/cred`
 
-在大多数同步系统调用场景下，它就是发起访问的进程或线程。
-
-但需要明确：
-
-- 在异步场景中，它不一定是最初发起请求的那个用户线程
-
-因此文档定义的 `subject` 语义始终是：
-
-- `hook execution subject`
-
-而不是：
-
-- `original user request subject`
+这比“resolver 异步运行时再读取当前 `current`”更准确，因为异步阶段的 `current` 可能已经变成 worker 线程自己。
 
 ## 7. request 字段定义
 

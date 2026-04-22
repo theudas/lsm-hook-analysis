@@ -51,10 +51,7 @@ make test
 
 下一步需要补的是真正的内核接入层，也就是：
 
-- 从 `current` 读取 `pid/tid/comm`
-- 从 `current_cred()` + `cred_sid()` 读取主体 SID
-- 用 `security_sid_to_context()` 转成 `scontext`
-- 从 `inode` / `file` 读取目标对象信息
-- 从 SELinux 对象读取 `tclass` 和 `tcontext`
+- 从外部稳定保存下来的 `task/cred` 读取 `pid/tid/comm/scontext`
+- 从外部传入的 `inode` / `file` 读取目标对象信息
+- 从 SELinux/LSM 可用接口读取 `tcontext`
 - 尽力恢复路径
-

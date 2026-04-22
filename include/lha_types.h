@@ -35,6 +35,10 @@ struct lha_capture_event_v1 {
     uint16_t hook_id;
     uint64_t ts_ns;
     int32_t ret;
+    struct {
+        const void *task;
+        const void *cred;
+    } subject;
     union {
         struct {
             const void *inode;
@@ -91,4 +95,3 @@ struct lha_enriched_event_v1 {
 };
 
 #endif
-

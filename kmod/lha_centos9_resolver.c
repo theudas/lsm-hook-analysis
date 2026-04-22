@@ -182,19 +182,23 @@ static void lha_classify_runtime_result(int ret, char *buf, size_t buf_len)
 	lha_copy_string(buf, buf_len, "error");
 }
 
-static int lha_fill_subject(struct lha_subject_v1 *subject)
+static int lha_fill_subject(struct task_struct *task, const struct cred *cred,
+			    struct lha_subject_v1 *subject)
 {
 	u32 secid = 0;
 	char *secctx = NULL;
 	u32 secctx_len = 0;
 	int rc;
 
-	memset(subject, 0, sizeof(*subject));
-	subject->pid = task_tgid_nr(current);
-	subject->tid = task_pid_nr(current);
-	lha_copy_string(subject->comm, sizeof(subject->comm), current->comm);
+	if (!task || !cred)
+		return -EINVAL;
 
-	security_cred_getsecid(current_cred(), &secid);
+	memset(subject, 0, sizeof(*subject));
+	subject->pid = task_tgid_nr(task);
+	subject->tid = task_pid_nr(task);
+	lha_copy_string(subject->comm, sizeof(subject->comm), task->comm);
+
+	security_cred_getsecid(cred, &secid);
 	rc = security_secid_to_secctx(secid, &secctx, &secctx_len);
 	if (rc)
 		return rc;
@@ -345,7 +349,7 @@ static int lha_resolve_inode_permission(const struct lha_capture_event_v1 *in,
 	lha_copy_string(out->hook_signature, sizeof(out->hook_signature),
 			"static int selinux_inode_permission(struct inode *inode, int mask)");
 
-	if (lha_fill_subject(&out->subject))
+	if (lha_fill_subject(in->subject.task, in->subject.cred, &out->subject))
 		return -EINVAL;
 	if (lha_fill_target_from_inode(inode, &out->target))
 		return -EINVAL;
@@ -370,7 +374,7 @@ static int lha_resolve_file_open(const struct lha_capture_event_v1 *in,
 	lha_copy_string(out->hook_signature, sizeof(out->hook_signature),
 			"static int selinux_file_open(struct file *file)");
 
-	if (lha_fill_subject(&out->subject))
+	if (lha_fill_subject(in->subject.task, in->subject.cred, &out->subject))
 		return -EINVAL;
 	if (lha_fill_target_from_file(file, &out->target))
 		return -EINVAL;
@@ -395,7 +399,7 @@ static int lha_resolve_file_permission(const struct lha_capture_event_v1 *in,
 	lha_copy_string(out->hook_signature, sizeof(out->hook_signature),
 			"static int selinux_file_permission(struct file *file, int mask)");
 
-	if (lha_fill_subject(&out->subject))
+	if (lha_fill_subject(in->subject.task, in->subject.cred, &out->subject))
 		return -EINVAL;
 	if (lha_fill_target_from_file(file, &out->target))
 		return -EINVAL;
@@ -416,6 +420,8 @@ int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
 			      struct lha_enriched_event_v1 *out)
 {
 	if (!in || !out || in->version != 1)
+		return -EINVAL;
+	if (!in->subject.task || !in->subject.cred)
 		return -EINVAL;
 
 	memset(out, 0, sizeof(*out));
