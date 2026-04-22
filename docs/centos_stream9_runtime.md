@@ -1,4 +1,4 @@
-# CentOS Stream 9 运行说明
+ # CentOS Stream 9 运行说明
 
 ## 1. 代码运行在什么地方
 
