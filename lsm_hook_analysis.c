@@ -789,32 +789,19 @@ static int lha_register_probes(void)
 {
 	int rc;
 
-	rc = register_kretprobe(&lha_inode_permission_probe);
-	if (rc)
-		return rc;
-
 	rc = register_kretprobe(&lha_file_open_probe);
-	if (rc)
-		goto err_file_open;
-
-	rc = register_kretprobe(&lha_file_permission_probe);
-	if (rc)
-		goto err_file_permission;
+	if (rc) {
+		pr_err("lsm_hook_analysis: register_kretprobe(selinux_file_open) failed: %d\n",
+		       rc);
+		return rc;
+	}
 
 	return 0;
-
-err_file_permission:
-	unregister_kretprobe(&lha_file_open_probe);
-err_file_open:
-	unregister_kretprobe(&lha_inode_permission_probe);
-	return rc;
 }
 
 static void lha_unregister_probes(void)
 {
-	unregister_kretprobe(&lha_file_permission_probe);
 	unregister_kretprobe(&lha_file_open_probe);
-	unregister_kretprobe(&lha_inode_permission_probe);
 }
 
 static int __init lha_init(void)
