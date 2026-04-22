@@ -1,12 +1,18 @@
-obj-m += lsm_hook_analysis.o
+CC ?= cc
+CFLAGS ?= -Wall -Wextra -Werror -std=c11
+USER_TARGET := hook_json_mock_demo
 
-KDIR ?= /lib/modules/$(shell uname -r)/build
-PWD := $(CURDIR)
+.PHONY: all user test clean
 
-.PHONY: all clean
+all: user
 
-all:
-	$(MAKE) -C $(KDIR) M=$(PWD) modules
+user: $(USER_TARGET)
+
+$(USER_TARGET): hook_json_mock_demo.c
+	$(CC) $(CFLAGS) -o $@ $<
+
+test: user
+	python3 -c 'import json, subprocess; print(json.loads(subprocess.check_output(["./$(USER_TARGET)"], text=True))["events"][0]["hook"])'
 
 clean:
-	$(MAKE) -C $(KDIR) M=$(PWD) clean
+	rm -rf $(USER_TARGET) mock-fixtures
