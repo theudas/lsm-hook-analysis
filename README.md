@@ -1,62 +1,110 @@
 # lsm-hook-analysis
 
-`lsm-hook-analysis` 当前包含一套可编译的核心解析层：
+`lsm-hook-analysis` 是一个面向 SELinux LSM hook 事件的资源访问解析项目。它不负责直接抓取 hook，而是接收外部抓取模块传入的 `task/cred/inode/file/mask/ret` 等内核对象和结果，在内核态解析出主体、目标资源、访问权限、SELinux 上下文、路径和运行结果，并输出统一结构化事件或 JSON。
 
-- 统一输入结构 `lha_capture_event_v1`
-- 统一输出结构 `lha_enriched_event_v1`
-- 3 个 SELinux hook 的路由与解析逻辑
-- `mask` 到权限语义的解码
-- JSON 序列化
-- `kernel ops` 适配接口
-- CentOS Stream 9 下拆分的 2 个内核模块：
-  - `lha_centos9_resolver.ko`
-    生产可用的 resolver API 模块
-  - `lha_centos9_injector.ko`
-    仅用于 debugfs 假事件注入和自测的测试模块
+它对应的是异常行为分析链路中的“LSM hook 追踪到的真实资源访问路径分析”能力。
 
-这层代码默认不直接耦合具体内核头文件，而是通过 `kernel ops` 回调接入真实内核态取数逻辑。这样我们可以先把事件模型、路由和输出层稳定下来，再把真正的 `current`、`cred`、`inode`、`file`、SELinux context 解析接进去。
+## 当前能力
 
-## 当前支持的 hook
+当前支持 3 类 SELinux hook 事件：
 
 - `selinux_inode_permission(struct inode *inode, int mask)`
 - `selinux_file_open(struct file *file)`
 - `selinux_file_permission(struct file *file, int mask)`
 
-## 目录结构
+当前可以解析和输出：
+
+- 主体信息：`pid`、`tid`、`comm`、`scontext`
+- 请求信息：`mask_raw`、`obj_type`、`perm`
+- 目标资源：`dev`、`ino`、`type`、`path`、`tclass`、`tcontext`
+- 结果信息：`ret`、`runtime_result`、`policy_result`
+- JSON 格式化结果
+
+其中 `policy_result` 当前仍为保留字段，CentOS Stream 9 内核模块版本默认输出 `unknown`。
+
+## 模块结构
+
+仓库分为用户态解析框架和内核态运行模块两部分：
 
 - `include/`
-  公共头文件
+  公共结构体和接口定义。
 - `src/`
-  核心实现
+  用户态可测试的通用 resolver 实现。
 - `tests/`
-  用户态单元测试
+  使用 mock kernel ops 的单元测试。
+- `kmod/lha_centos9_resolver.c`
+  生产可用的 CentOS Stream 9 内核态 resolver 模块。
+- `kmod/lha_centos9_injector.c`
+  仅用于 debugfs 假事件注入和自测的独立测试模块。
 - `docs/`
-  文档
+  接口、运行和使用文档。
 
-## 构建
+`kmod/` 会构建出两个内核模块：
+
+- `lha_centos9_resolver.ko`
+  生产模块，导出 `lha_centos9_resolve_event()` 和 `lha_centos9_format_json()`。
+- `lha_centos9_injector.ko`
+  自测模块，通过 resolver 导出的 API 构造假事件并输出最近一次 JSON。
+
+## 快速开始
+
+用户态验证：
 
 ```bash
 make
-```
-
-## 测试
-
-```bash
 make test
 ```
 
-测试使用一组 mock `kernel ops`，验证：
+内核模块编译和运行需要在 Linux/CentOS Stream 9 环境中进行：
 
-- hook 路由
-- subject/request/target/result 填充
-- `perm` 解码
-- JSON 输出
+```bash
+cd kmod
+make
+sudo insmod lha_centos9_resolver.ko
+sudo insmod lha_centos9_injector.ko
+```
 
-## 下一步
+假事件注入自测：
 
-下一步需要补的是真正的内核接入层，也就是：
+```bash
+sudo mount -t debugfs none /sys/kernel/debug
+echo sample_open | sudo tee /sys/kernel/debug/lha_centos9/inject
+cat /sys/kernel/debug/lha_centos9/last_json
+```
 
-- 从外部稳定保存下来的 `task/cred` 读取 `pid/tid/comm/scontext`
-- 从外部传入的 `inode` / `file` 读取目标对象信息
-- 从 SELinux/LSM 可用接口读取 `tcontext`
-- 尽力恢复路径
+完整步骤请看：
+
+- `docs/usage.md`
+
+## 对外接入方式
+
+外部抓取模块需要：
+
+1. 在 hook 现场保存稳定引用，例如 `get_task_struct()`、`get_cred()`、`get_file()`、`igrab()`。
+2. 组装 `struct lha_capture_event_v1`。
+3. 在 workqueue/kthread 等可睡眠上下文中调用 `lha_centos9_resolve_event()`。
+4. 如需 JSON，再调用 `lha_centos9_format_json()`。
+5. 调用方自己释放此前保存的引用。
+
+详细 API 说明请看：
+
+- `docs/api.md`
+
+## 重要边界
+
+- 本项目当前不负责注册或抓取真实 LSM hook。
+- 真实生产链路需要外部抓取模块把 hook 参数和返回值传给 resolver。
+- `file *` 路径恢复通常更接近用户空间看到的真实路径。
+- `inode *` 路径恢复是 best effort，不保证是全局绝对路径。
+- `lha_centos9_injector.ko` 只是自测模块，不建议作为生产入口。
+
+## 文档
+
+- `docs/usage.md`
+  从克隆项目到编译、加载模块、假事件注入的完整操作说明。
+- `docs/api.md`
+  外部模块如何调用 resolver API。
+- `docs/interface_contract.md`
+  v1 输入输出接口约束。
+- `docs/centos_stream9_runtime.md`
+  CentOS Stream 9 内核态运行说明。
