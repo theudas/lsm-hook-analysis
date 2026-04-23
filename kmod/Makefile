@@ -1,4 +1,5 @@
 obj-m += lha_centos9_resolver.o
+obj-m += lha_centos9_injector.o
 
 KDIR ?= /lib/modules/$(shell uname -r)/build
 PWD := $(shell pwd)
@@ -10,4 +11,3 @@ all:
 
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
-

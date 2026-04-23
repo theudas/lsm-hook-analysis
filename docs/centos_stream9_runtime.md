@@ -8,6 +8,11 @@
   这是当前已经跑通的“解析框架层”，主要用于把事件模型、hook 路由、权限语义解码和 JSON 格式定下来。
 - `kmod/`
   这是面向 CentOS Stream 9 的“内核运行层”，它才是实际部署到服务器上的版本。
+  现在 `kmod/` 内又拆成两个模块：
+  - `lha_centos9_resolver.ko`
+    生产可用的 resolver API 模块
+  - `lha_centos9_injector.ko`
+    仅用于 debugfs 假事件注入和自测的测试模块
 
 真正部署时，关键逻辑运行在 **内核态**，而不是用户态。
 
@@ -30,7 +35,8 @@
 
 因此，这份代码不是“用户态命令行工具”，而是：
 
-- 一个内核模块内的解析组件
+- 一个可加载的生产 resolver 模块
+- 一个可选的自测 injector 模块
 - 或者一个和现有抓取模块链接在一起的内核侧库
 
 ## 2. 为什么建议在 workqueue 里运行
@@ -82,6 +88,8 @@
 
 ## 4. 当前内核模块代码做了什么
 
+### 4.1 `lha_centos9_resolver.ko`
+
 `kmod/lha_centos9_resolver.c` 已经实现了：
 
 - 3 个 hook 的路由
@@ -100,6 +108,22 @@
   - `perm`
 - 生成统一结构化结果
 - 将结果格式化成 JSON
+
+它对外导出：
+
+- `lha_centos9_resolve_event()`
+- `lha_centos9_format_json()`
+
+### 4.2 `lha_centos9_injector.ko`
+
+`kmod/lha_centos9_injector.c` 不参与生产解析链路，它的职责是：
+
+- 创建 debugfs 调试入口
+- 构造 3 组假事件
+- 通过导出的 resolver API 调用：
+  - `lha_centos9_resolve_event()`
+  - `lha_centos9_format_json()`
+- 保存最近一次生成的 JSON，方便自测验证
 
 ## 5. 路径字段的现实边界
 
@@ -140,17 +164,10 @@ make KDIR=/Users/tanruoying/Desktop/codex_chat/centos-stream-9
 
 ### 6.2 加载方式
 
-编译出 `lha_centos9_resolver.ko` 后：
+生产场景最小加载方式：
 
 ```bash
 sudo insmod lha_centos9_resolver.ko
-```
-
-模块加载后会创建：
-
-```bash
-/sys/kernel/debug/lha_centos9/inject
-/sys/kernel/debug/lha_centos9/last_json
 ```
 
 如果你的抓取模块和 resolver 是分开的，那么典型加载顺序是：
@@ -159,6 +176,19 @@ sudo insmod lha_centos9_resolver.ko
 2. 再加载抓取 hook 参数/返回值的模块
 3. 抓取模块在收到原始事件后调用：
    `lha_centos9_resolve_event()`
+
+如果你还需要做假事件注入自测，再额外加载：
+
+```bash
+sudo insmod lha_centos9_injector.ko
+```
+
+只有在加载 `lha_centos9_injector.ko` 之后，才会创建：
+
+```bash
+/sys/kernel/debug/lha_centos9/inject
+/sys/kernel/debug/lha_centos9/last_json
+```
 
 ### 6.3 推荐调用方式
 
@@ -184,7 +214,14 @@ sudo insmod lha_centos9_resolver.ko
 
 ### 6.4 假事件注入验证
 
-为了不依赖真实抓取模块，当前版本额外提供了一个 debugfs 注入入口，可以直接在服务器上验证 resolver 是否能工作。
+为了不依赖真实抓取模块，当前版本额外提供了一个独立的 injector 模块，可以直接在服务器上验证 resolver 是否能工作。
+
+先加载：
+
+```bash
+sudo insmod lha_centos9_resolver.ko
+sudo insmod lha_centos9_injector.ko
+```
 
 先确保 debugfs 已挂载：
 
@@ -232,6 +269,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 这个入口的定位是：
 
 - 验证 resolver 自身能否正确运行
+- 验证 injector 是否能通过导出的 resolver API 完成一次完整调用
 - 验证 `task/cred + inode/file` 这条解析链路
 - 验证 JSON 输出格式
 

@@ -8,6 +8,11 @@
 - `mask` 到权限语义的解码
 - JSON 序列化
 - `kernel ops` 适配接口
+- CentOS Stream 9 下拆分的 2 个内核模块：
+  - `lha_centos9_resolver.ko`
+    生产可用的 resolver API 模块
+  - `lha_centos9_injector.ko`
+    仅用于 debugfs 假事件注入和自测的测试模块
 
 这层代码默认不直接耦合具体内核头文件，而是通过 `kernel ops` 回调接入真实内核态取数逻辑。这样我们可以先把事件模型、路由和输出层稳定下来，再把真正的 `current`、`cred`、`inode`、`file`、SELinux context 解析接进去。
 
