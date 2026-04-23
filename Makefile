@@ -1,5 +1,5 @@
 CC ?= cc
-CFLAGS ?= -std=c11 -Wall -Wextra -Werror -pedantic -Iinclude
+CFLAGS ?= -D_DEFAULT_SOURCE -std=c11 -Wall -Wextra -Werror -pedantic -Iinclude
 
 BUILD_DIR := build
 LIB := $(BUILD_DIR)/liblha.a
@@ -35,4 +35,3 @@ test: $(TEST)
 
 clean:
 	rm -rf $(BUILD_DIR)
-
