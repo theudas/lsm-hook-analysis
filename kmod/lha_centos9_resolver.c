@@ -144,7 +144,9 @@ static void lha_decode_mask_perm(umode_t mode, int mask, bool add_open,
 static void lha_decode_file_open_perm(const struct file *file,
 				      char *buf, size_t buf_len)
 {
+#ifdef O_EXEC
 	umode_t mode = file_inode(file)->i_mode;
+#endif
 	int accmode = file->f_flags & O_ACCMODE;
 
 	if (!buf || buf_len == 0)

@@ -5,6 +5,7 @@
 #include <linux/debugfs.h>
 #include <linux/err.h>
 #include <linux/errno.h>
+#include <linux/file.h>
 #include <linux/fcntl.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
@@ -82,21 +83,35 @@ static void lha_store_last_json(const char *json)
 
 static int lha_run_injected_event(struct lha_capture_event_v1 *event)
 {
-	struct lha_enriched_event_v1 out;
-	char json[LHA_LAST_JSON_LEN];
+	struct lha_enriched_event_v1 *out;
+	char *json;
 	int rc;
 
-	rc = lha_centos9_resolve_event(event, &out);
-	if (rc)
-		return rc;
+	out = kzalloc(sizeof(*out), GFP_KERNEL);
+	if (!out)
+		return -ENOMEM;
 
-	rc = lha_centos9_format_json(&out, json, sizeof(json));
+	json = kmalloc(LHA_LAST_JSON_LEN, GFP_KERNEL);
+	if (!json) {
+		kfree(out);
+		return -ENOMEM;
+	}
+
+	rc = lha_centos9_resolve_event(event, out);
 	if (rc)
-		return rc;
+		goto out_free;
+
+	rc = lha_centos9_format_json(out, json, LHA_LAST_JSON_LEN);
+	if (rc)
+		goto out_free;
 
 	lha_store_last_json(json);
-	pr_info("lha_centos9_injector: generated %s event\n", out.hook);
-	return 0;
+	pr_info("lha_centos9_injector: generated %s event\n", out->hook);
+
+out_free:
+	kfree(json);
+	kfree(out);
+	return rc;
 }
 
 static int lha_inject_sample_inode_permission(void)
