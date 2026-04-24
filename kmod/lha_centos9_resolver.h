@@ -22,6 +22,8 @@
 #define LHA_MAY_APPEND 0x00000008
 #define LHA_MAY_OPEN   0x00000020
 
+#define LHA_DEFAULT_AVC_WINDOW_NS 50000000ull
+
 enum lha_hook_id {
 	LHA_HOOK_INODE_PERMISSION = 1,
 	LHA_HOOK_FILE_OPEN = 2,
@@ -33,6 +35,13 @@ enum lha_policy_state {
 	LHA_POLICY_ALLOW = 1,
 	LHA_POLICY_DENY = 2,
 	LHA_POLICY_INFERRED_ALLOW = 3,
+};
+
+enum lha_policy_result_kind {
+	LHA_POLICY_RESULT_UNKNOWN = 0,
+	LHA_POLICY_RESULT_DENY = 1,
+	LHA_POLICY_RESULT_INFERRED_ALLOW = 2,
+	LHA_POLICY_RESULT_ALLOW = 3,
 };
 
 struct lha_capture_event_v1 {
@@ -101,6 +110,24 @@ struct lha_enriched_event_v1 {
 	struct lha_result_v1 result;
 };
 
+struct lha_avc_event_v1 {
+	__u64 timestamp_ns;
+	char scontext[LHA_MAX_CONTEXT_LEN];
+	char tcontext[LHA_MAX_CONTEXT_LEN];
+	char tclass[LHA_MAX_TYPE_LEN];
+	char perm[LHA_MAX_PERM_LEN];
+	__u32 pid;
+	__u32 tid;
+	char comm[LHA_MAX_COMM_LEN];
+	__u8 permissive;
+	__u8 denied;
+	__u8 reserved[2];
+};
+
+struct lha_avc_match_options {
+	__u64 window_ns;
+};
+
 /*
  * 外部抓取方必须在 hook 现场为下面这些对象建立稳定引用，再把它们传给 resolver：
  * - task: 例如 get_task_struct()
@@ -118,5 +145,19 @@ int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
 int lha_centos9_format_json(const struct lha_enriched_event_v1 *event,
 			    char *buf,
 			    size_t buf_len);
+
+const char *lha_centos9_policy_result_kind_to_string(enum lha_policy_result_kind kind);
+
+enum lha_policy_result_kind lha_centos9_correlate_avc_policy(
+	const struct lha_enriched_event_v1 *event,
+	const struct lha_avc_event_v1 *avc_events,
+	size_t avc_count,
+	const struct lha_avc_match_options *options);
+
+int lha_centos9_apply_avc_policy_result(
+	struct lha_enriched_event_v1 *event,
+	const struct lha_avc_event_v1 *avc_events,
+	size_t avc_count,
+	const struct lha_avc_match_options *options);
 
 #endif

@@ -81,9 +81,30 @@ static void lha_store_last_json(const char *json)
 	mutex_unlock(&lha_last_json_lock);
 }
 
-static int lha_run_injected_event(struct lha_capture_event_v1 *event)
+static void lha_build_matching_avc_event(const struct lha_enriched_event_v1 *event,
+					 struct lha_avc_event_v1 *avc)
+{
+	memset(avc, 0, sizeof(*avc));
+	avc->timestamp_ns = event->timestamp_ns + 1000;
+	avc->pid = event->subject.pid;
+	avc->tid = event->subject.tid;
+	avc->denied = 1;
+
+	lha_copy_string(avc->comm, sizeof(avc->comm), event->subject.comm);
+	lha_copy_string(avc->scontext, sizeof(avc->scontext),
+			event->subject.scontext);
+	lha_copy_string(avc->tcontext, sizeof(avc->tcontext),
+			event->target.tcontext);
+	lha_copy_string(avc->tclass, sizeof(avc->tclass), event->target.tclass);
+	lha_copy_string(avc->perm, sizeof(avc->perm), event->request.perm);
+}
+
+static int lha_run_injected_event(struct lha_capture_event_v1 *event,
+				  bool inject_matching_avc_deny)
 {
 	struct lha_enriched_event_v1 *out;
+	struct lha_avc_event_v1 avc;
+	struct lha_avc_match_options options;
 	char *json;
 	int rc;
 
@@ -98,6 +119,18 @@ static int lha_run_injected_event(struct lha_capture_event_v1 *event)
 	}
 
 	rc = lha_centos9_resolve_event(event, out);
+	if (rc)
+		goto out_free;
+
+	memset(&options, 0, sizeof(options));
+	options.window_ns = LHA_DEFAULT_AVC_WINDOW_NS;
+
+	if (inject_matching_avc_deny) {
+		lha_build_matching_avc_event(out, &avc);
+		rc = lha_centos9_apply_avc_policy_result(out, &avc, 1, &options);
+	} else {
+		rc = lha_centos9_apply_avc_policy_result(out, NULL, 0, &options);
+	}
 	if (rc)
 		goto out_free;
 
@@ -135,12 +168,11 @@ static int lha_inject_sample_inode_permission(void)
 	event.hook_id = LHA_HOOK_INODE_PERMISSION;
 	event.ts_ns = ktime_get_real_ns();
 	event.ret = 0;
-	event.policy_state = LHA_POLICY_ALLOW;
 	lha_capture_subject_refs(&event);
 	event.args.inode_permission.inode = inode;
 	event.args.inode_permission.mask = LHA_MAY_EXEC;
 
-	rc = lha_run_injected_event(&event);
+	rc = lha_run_injected_event(&event, false);
 	lha_release_capture_refs(&event);
 	return rc;
 }
@@ -160,11 +192,10 @@ static int lha_inject_sample_file_open(void)
 	event.hook_id = LHA_HOOK_FILE_OPEN;
 	event.ts_ns = ktime_get_real_ns();
 	event.ret = 0;
-	event.policy_state = LHA_POLICY_ALLOW;
 	lha_capture_subject_refs(&event);
 	event.args.file_open.file = file;
 
-	rc = lha_run_injected_event(&event);
+	rc = lha_run_injected_event(&event, false);
 	lha_release_capture_refs(&event);
 	return rc;
 }
@@ -184,12 +215,11 @@ static int lha_inject_sample_file_permission(void)
 	event.hook_id = LHA_HOOK_FILE_PERMISSION;
 	event.ts_ns = ktime_get_real_ns();
 	event.ret = -EACCES;
-	event.policy_state = LHA_POLICY_DENY;
 	lha_capture_subject_refs(&event);
 	event.args.file_permission.file = file;
 	event.args.file_permission.mask = LHA_MAY_WRITE;
 
-	rc = lha_run_injected_event(&event);
+	rc = lha_run_injected_event(&event, true);
 	lha_release_capture_refs(&event);
 	return rc;
 }
