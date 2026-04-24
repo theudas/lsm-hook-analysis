@@ -7,7 +7,7 @@
 - 为什么单靠现有 hook 事件无法稳定得到 `policy_result`
 - 如果引入 AVC 关联，系统边界应该怎么划分
 - v1 版本应该先做到什么程度
-- 后续如果要把 `policy_result` 从 `deny/unknown` 扩展到完整 `allow/deny`，架构上需要预留什么
+- 如果采用“未观测到 AVC deny 即推断 allow”的策略，语义边界应该如何表达
 
 本文档是设计稿，不代表代码已经实现。
 
@@ -45,6 +45,8 @@
 
 因此，`policy_result` 必须来自额外的策略判定来源，而不是从现有 hook 参数硬推。
 
+如果采用 AVC 作为主要证据源，那么 v1 可以把“未在 AVC 日志中观测到 deny”作为 allow 的推断依据，但必须明确这个值是推断而不是强证明。
+
 ## 3. 设计结论
 
 ### 3.1 总结
@@ -61,21 +63,24 @@
 推荐先实现：
 
 - `policy_result = deny`
+- `policy_result = inferred_allow`
 - `policy_result = unknown`
 
-不建议在 AVC-only 的第一版里承诺完整 `allow/deny`。
+不建议在 AVC-only 的第一版里把未命中的情况直接命名成强语义的 `allow`。
 
-原因是 AVC 事件天然更适合表达“拒绝发生了”，但并不天然覆盖所有 allow 场景。
+原因是 AVC 事件天然更适合表达“拒绝发生了”，而“未观测到 deny”本质上只是负证据推断。
 
 换句话说：
 
 - 能可靠匹配到 AVC deny -> `policy_result = deny`
-- 没匹配到 AVC -> 先保持 `unknown`
+- 在观测窗口内没有匹配到 AVC deny，并且 AVC 采集链路健康 -> `policy_result = inferred_allow`
+- 如果 AVC 链路状态不可信，或者匹配前提不满足 -> `policy_result = unknown`
 
 这版已经能解决当前最关键的问题：
 
 - 在 permissive 模式下识别“policy deny + runtime allow”
 - 在 enforcing 模式下把“policy deny + runtime deny”从 `ret` 的影子推断变成真正的策略结论
+- 在没有 deny 证据时，给出一个可消费的推断型 allow 结果
 
 ### 3.3 长期目标
 
@@ -83,6 +88,7 @@
 
 - `policy_result = allow`
 - `policy_result = deny`
+- `policy_result = inferred_allow`
 - `policy_result = unknown`
 
 则建议在 AVC 关联之外，再补一条更靠近 SELinux decision 的采集路径。
@@ -143,10 +149,11 @@
 - 可以落地
 - 能较可靠识别 deny
 - 能覆盖 permissive 下的 policy deny
+- 能在没有 deny 证据时给出 `inferred_allow`
 
 缺点：
 
-- 对 allow 的覆盖天然不足
+- `inferred_allow` 只是一种推断，不是强证明
 - 需要维护待匹配缓存
 - 匹配规则设计不好会出现误配或漏配
 
@@ -180,8 +187,8 @@
 
 推荐采用分阶段路线：
 
-1. v1：先做 AVC 关联，输出 `deny/unknown`
-2. v2：再评估 decision 路径，把 `allow` 也补齐
+1. v1：先做 AVC 关联，输出 `deny/inferred_allow/unknown`
+2. v2：再评估 decision 路径，把强语义 `allow` 也补齐
 
 ## 6. 推荐架构
 
@@ -214,10 +221,10 @@ correlated event
     -> json output
 ```
 
-关联失败则：
+未命中 deny 时则：
 
 ```text
-policy_result = unknown
+policy_result = inferred_allow 或 unknown
 ```
 
 ## 7. 为什么推荐“先 resolve，再做 AVC 关联”
@@ -313,6 +320,42 @@ struct lha_avc_event_v1 {
 - 上面是仓库内部归一化结构
 - 不要求底层 AVC 采集源天然就长这样
 - 无论底层来自内核探针还是 audit 日志，最后都应转换成这一个结构
+
+## 8.3 关联状态与链路健康建议
+
+如果要支持 `inferred_allow`，仅仅知道“没匹配到 AVC”还不够，还需要有一套最基本的链路健康判断。
+
+建议至少维护下面两类状态：
+
+```c
+enum lha_policy_result_kind {
+    LHA_POLICY_RESULT_UNKNOWN = 0,
+    LHA_POLICY_RESULT_DENY,
+    LHA_POLICY_RESULT_INFERRED_ALLOW,
+    LHA_POLICY_RESULT_ALLOW,
+};
+
+enum lha_avc_pipeline_state {
+    LHA_AVC_PIPELINE_UNKNOWN = 0,
+    LHA_AVC_PIPELINE_HEALTHY,
+    LHA_AVC_PIPELINE_DEGRADED,
+};
+```
+
+其中：
+
+- `DENY` 表示有正向 deny 证据
+- `INFERRED_ALLOW` 表示在观测窗口内没有 deny 证据，且 AVC 链路被认为健康
+- `UNKNOWN` 表示无法安全推断
+- `ALLOW` 预留给未来 decision 路径的强语义 allow
+
+`LHA_AVC_PIPELINE_HEALTHY` 的判定不需要一开始做得很复杂，但至少应能区分：
+
+- 采集线程正常运行
+- AVC 数据源最近有持续输入
+- 当前事件具备完成匹配所需的关键字段
+
+只要上面任一条件不满足，就不应贸然输出 `inferred_allow`。
 
 ## 9. 匹配键设计
 
@@ -434,6 +477,8 @@ v1 可以先给一个保守默认值，例如：
 - 内核内关联：窗口更小
 - 跨内核到用户态 audit 日志关联：窗口更大
 
+一条 hook 事件只有在窗口结束后仍未看到匹配的 AVC deny，才允许进入 `inferred_allow` 判定。
+
 ## 12. 关联结果语义
 
 ## 12.1 v1 输出规则
@@ -442,7 +487,11 @@ v1 可以先给一个保守默认值，例如：
 
 - `policy_result = deny`
 
-如果未匹配到 AVC：
+如果在观测窗口内未匹配到 AVC deny，且 AVC 链路健康：
+
+- `policy_result = inferred_allow`
+
+如果 AVC 链路状态不可信，或者事件本身缺少关键匹配字段：
 
 - `policy_result = unknown`
 
@@ -455,7 +504,7 @@ v1 可以先给一个保守默认值，例如：
 
 ## 12.2 为什么 v1 不直接输出 allow
 
-因为“没有看到 AVC deny”不等于“policy allow”。
+因为“没有看到 AVC deny”不等于“拿到了强证明的 policy allow”。
 
 可能出现：
 
@@ -466,7 +515,9 @@ v1 可以先给一个保守默认值，例如：
 
 因此 v1 里：
 
-- 没匹配到 deny，只能保守输出 `unknown`
+- 未命中 deny 时只输出 `inferred_allow`
+- 只有在链路健康和字段完整时才允许这样推断
+- 任何不满足条件的情况都回退为 `unknown`
 
 ## 13. 数据流建议
 
@@ -478,7 +529,9 @@ v1 可以先给一个保守默认值，例如：
 2. 放入 workqueue
 3. 调用现有 resolver 生成 `lha_enriched_event_v1`
 4. 放入 `pending_hook` 表等待关联
-5. 如果超时仍未匹配，输出 `unknown`
+5. 如果超时仍未匹配：
+   - AVC 链路健康 -> 输出 `inferred_allow`
+   - AVC 链路不健康 -> 输出 `unknown`
 
 ## 13.2 AVC 事件流
 
@@ -628,6 +681,7 @@ v1 可以先给一个保守默认值，例如：
 1. 生成 enriched hook event
 2. 与 AVC 标准化事件关联
 3. 在 `struct lha_enriched_event_v1.result.policy_result` 上回填结果
+4. 在未命中 deny 时，根据 AVC 链路健康度决定填 `inferred_allow` 还是 `unknown`
 
 `policy_state` 字段仍然保留，作为：
 
@@ -651,7 +705,8 @@ v1 可以先给一个保守默认值，例如：
 - 新增 AVC 标准化结构
 - 新增 pending 缓存
 - 新增匹配函数
-- 暂时只支持 `deny/unknown`
+- 支持 `deny/inferred_allow/unknown`
+- 增加最小化 AVC 链路健康判断
 
 产出：
 
@@ -674,6 +729,7 @@ v1 可以先给一个保守默认值，例如：
 
 - permissive deny 可见
 - enforcing deny 可显式表达为 policy deny
+- 正常未命中 deny 的事件可以输出 `inferred_allow`
 
 ## 17.3 Phase 3
 
@@ -688,7 +744,7 @@ v1 可以先给一个保守默认值，例如：
 
 产出：
 
-- `allow/deny/unknown` 完整语义
+- `allow/deny/inferred_allow/unknown` 完整语义
 
 ## 18. 测试建议
 
@@ -697,11 +753,12 @@ v1 可以先给一个保守默认值，例如：
 1. enforcing deny
 2. permissive deny
 3. 正常 allow 且无 AVC
-4. 同一时刻多个相似请求并发
-5. AVC 晚到
-6. AVC 先到
-7. 超时淘汰
-8. 一条 AVC 对多条 hook 候选的歧义选择
+4. AVC 链路不健康时的 unknown 回退
+5. 同一时刻多个相似请求并发
+6. AVC 晚到
+7. AVC 先到
+8. 超时淘汰
+9. 一条 AVC 对多条 hook 候选的歧义选择
 
 特别要验证：
 
@@ -717,34 +774,40 @@ v1 可以先给一个保守默认值，例如：
 - 时间窗口设置不合适，导致误配或漏配
 - 高并发场景下同类事件过多，歧义上升
 - 如果 AVC 来源过于依赖私有内核实现，版本迁移成本会上升
+- 如果链路健康判断做得不严，`inferred_allow` 会被误当成强 allow 使用
 
 因此 v1 应坚持：
 
 - 先求正确
 - 再求覆盖率
-- 宁可 `unknown`，不要错填 `deny`
+- `deny` 必须来自正证据
+- `inferred_allow` 必须明确是推断值
+- 链路不健康时宁可回退 `unknown`
 
 ## 20. 审阅时建议重点确认的问题
 
 请重点确认下面几项是否符合预期：
 
-1. v1 是否接受 `policy_result` 先只做到 `deny/unknown`
+1. v1 是否接受 `policy_result` 输出 `deny/inferred_allow/unknown`
 2. 关联位置是放在 resolver 之后，还是必须要求外部模块先关联
 3. AVC 真实来源优先做内核探针，还是先做用户态 audit 原型
 4. 默认输出模式是延迟输出，还是两阶段输出
 5. 时间窗口默认值希望偏保守还是偏宽松
+6. `inferred_allow` 是否直接写入 `policy_result`，还是需要额外增加来源/置信度字段
 
 ## 21. 当前建议
 
 基于当前仓库状态，我的建议是：
 
-1. 先接受 v1 只做 `deny/unknown`
+1. 先接受 v1 做 `deny/inferred_allow/unknown`
 2. 关联逻辑放在 resolver 之后
-3. 先把仓库内部的数据结构、缓存、匹配接口写好
-4. 真实 AVC 来源在 coding 前再结合目标内核树确认
+3. 实现里明确把 `inferred_allow` 当作推断值处理
+4. 先把仓库内部的数据结构、缓存、匹配接口写好
+5. 真实 AVC 来源在 coding 前再结合目标内核树确认
 
 这样推进的好处是：
 
 - 不会一开始就把接口绑死在某个不稳定的内核私有挂点上
 - 可以先把主链路架起来
 - 后续无论 AVC 来自内核还是 audit 日志，都有统一落点
+- 当前业务又能尽早消费一个可解释的“未观测 deny”结果
