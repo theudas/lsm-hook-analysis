@@ -172,10 +172,28 @@ static void classify_runtime_result(int ret, char *buf, size_t buf_len)
     copy_string(buf, buf_len, "error");
 }
 
+static const char *policy_state_to_string(uint8_t policy_state)
+{
+    switch (policy_state) {
+    case LHA_POLICY_ALLOW:
+        return "allow";
+    case LHA_POLICY_DENY:
+        return "deny";
+    default:
+        return "unknown";
+    }
+}
+
 static int resolve_policy_result(const struct lha_kernel_ops *ops,
                                  const struct lha_capture_event_v1 *event,
                                  struct lha_result_v1 *result)
 {
+    if (event != NULL && event->policy_state != LHA_POLICY_UNKNOWN) {
+        copy_string(result->policy_result, sizeof(result->policy_result),
+                    policy_state_to_string(event->policy_state));
+        return 0;
+    }
+
     if (ops == NULL || ops->resolve_policy_result == NULL) {
         copy_string(result->policy_result, sizeof(result->policy_result), "unknown");
         return 0;

@@ -184,6 +184,18 @@ static void lha_classify_runtime_result(int ret, char *buf, size_t buf_len)
 	lha_copy_string(buf, buf_len, "error");
 }
 
+static const char *lha_policy_state_to_string(__u8 policy_state)
+{
+	switch (policy_state) {
+	case LHA_POLICY_ALLOW:
+		return "allow";
+	case LHA_POLICY_DENY:
+		return "deny";
+	default:
+		return "unknown";
+	}
+}
+
 static int lha_fill_subject(struct task_struct *task, const struct cred *cred,
 			    struct lha_subject_v1 *subject)
 {
@@ -346,7 +358,7 @@ static void lha_fill_result(const struct lha_capture_event_v1 *in,
 				    sizeof(result->runtime_result));
 	lha_copy_string(result->policy_result,
 			sizeof(result->policy_result),
-			"unknown");
+			lha_policy_state_to_string(in->policy_state));
 }
 
 static int lha_resolve_inode_permission(const struct lha_capture_event_v1 *in,

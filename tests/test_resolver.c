@@ -149,6 +149,26 @@ static void test_inode_permission(const struct lha_kernel_ops *ops)
     assert(strcmp(output.result.policy_result, "allow") == 0);
 }
 
+static void test_policy_state_override(const struct lha_kernel_ops *ops)
+{
+    struct lha_capture_event_v1 input;
+    struct lha_enriched_event_v1 output;
+
+    memset(&input, 0, sizeof(input));
+    input.version = 1;
+    input.hook_id = LHA_HOOK_FILE_OPEN;
+    input.ts_ns = 211;
+    input.ret = 0;
+    input.policy_state = LHA_POLICY_DENY;
+    input.subject.task = (const void *)2;
+    input.subject.cred = (const void *)2;
+    input.args.file_open.file = (const void *)1;
+
+    assert(lha_resolve_event(ops, &input, &output) == 0);
+    assert(strcmp(output.result.runtime_result, "allow") == 0);
+    assert(strcmp(output.result.policy_result, "deny") == 0);
+}
+
 static void test_file_open(const struct lha_kernel_ops *ops)
 {
     struct lha_capture_event_v1 input;
@@ -209,6 +229,7 @@ int main(void)
     ops.resolve_policy_result = mock_policy_result;
 
     test_inode_permission(&ops);
+    test_policy_state_override(&ops);
     test_file_open(&ops);
     test_file_permission(&ops);
 

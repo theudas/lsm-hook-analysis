@@ -346,7 +346,7 @@ if (!rc) {
 - 不要在不可睡眠上下文直接调用 resolver。
 - `inode_permission` 只有 `inode`，路径恢复是 best effort，不保证是全局绝对路径。
 - `file_open/file_permission` 因为持有 `file->f_path`，通常更容易恢复出接近真实访问路径的结果。
-- 当前 `policy_result` 在 CentOS 9 内核模块版本里默认仍为 `unknown`。
+- 当前 `policy_result` 需要调用方在 `struct lha_capture_event_v1.policy_state` 中显式提供；未提供时会回退为 `unknown`。
 - 如果调用方与 resolver 模块分开加载，推荐先加载 `lha_centos9_resolver.ko`，再加载抓取模块。
 
 相关实现位置：

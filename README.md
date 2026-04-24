@@ -20,7 +20,7 @@
 - 结果信息：`ret`、`runtime_result`、`policy_result`
 - JSON 格式化结果
 
-其中 `policy_result` 当前仍为保留字段，CentOS Stream 9 内核模块版本默认输出 `unknown`。
+其中 `policy_result` 需要由调用方额外提供真实策略判定来源；如果 `struct lha_capture_event_v1.policy_state` 未填写，CentOS Stream 9 内核模块版本会回退为 `unknown`。
 
 ## 模块结构
 

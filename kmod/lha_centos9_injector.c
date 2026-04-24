@@ -135,6 +135,7 @@ static int lha_inject_sample_inode_permission(void)
 	event.hook_id = LHA_HOOK_INODE_PERMISSION;
 	event.ts_ns = ktime_get_real_ns();
 	event.ret = 0;
+	event.policy_state = LHA_POLICY_ALLOW;
 	lha_capture_subject_refs(&event);
 	event.args.inode_permission.inode = inode;
 	event.args.inode_permission.mask = LHA_MAY_EXEC;
@@ -159,6 +160,7 @@ static int lha_inject_sample_file_open(void)
 	event.hook_id = LHA_HOOK_FILE_OPEN;
 	event.ts_ns = ktime_get_real_ns();
 	event.ret = 0;
+	event.policy_state = LHA_POLICY_ALLOW;
 	lha_capture_subject_refs(&event);
 	event.args.file_open.file = file;
 
@@ -182,6 +184,7 @@ static int lha_inject_sample_file_permission(void)
 	event.hook_id = LHA_HOOK_FILE_PERMISSION;
 	event.ts_ns = ktime_get_real_ns();
 	event.ret = -EACCES;
+	event.policy_state = LHA_POLICY_DENY;
 	lha_capture_subject_refs(&event);
 	event.args.file_permission.file = file;
 	event.args.file_permission.mask = LHA_MAY_WRITE;
