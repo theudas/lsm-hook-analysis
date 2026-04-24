@@ -54,6 +54,7 @@
 ```bash
 make
 make test
+make replay-avc
 ```
 
 内核模块编译和运行需要在 Linux/CentOS Stream 9 环境中进行：
@@ -76,6 +77,15 @@ cat /sys/kernel/debug/lha_centos9/last_json
 完整步骤请看：
 
 - `docs/usage.md`
+
+AVC 重放验证：
+
+```bash
+./build/replay_avc --help
+./build/replay_avc
+```
+
+默认会使用一组内置的 `entrypoint deny` 样例；你也可以把虚拟机里 `ausearch` 拿到的字段通过命令行参数覆盖进去。
 
 ## 对外接入方式
 
