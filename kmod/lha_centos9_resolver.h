@@ -32,6 +32,7 @@ enum lha_policy_state {
 	LHA_POLICY_UNKNOWN = 0,
 	LHA_POLICY_ALLOW = 1,
 	LHA_POLICY_DENY = 2,
+	LHA_POLICY_INFERRED_ALLOW = 3,
 };
 
 struct lha_capture_event_v1 {

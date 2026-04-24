@@ -18,6 +18,7 @@
 - 请求信息：`mask_raw`、`obj_type`、`perm`
 - 目标资源：`dev`、`ino`、`type`、`path`、`tclass`、`tcontext`
 - 结果信息：`ret`、`runtime_result`、`policy_result`
+- 用户态 AVC 关联辅助：基于 `include/lha_avc.h` 将 enriched hook event 与 AVC deny 事件关联，输出 `deny`、`inferred_allow` 或 `unknown`
 - JSON 格式化结果
 
 其中 `policy_result` 需要由调用方额外提供真实策略判定来源；如果 `struct lha_capture_event_v1.policy_state` 未填写，CentOS Stream 9 内核模块版本会回退为 `unknown`。
@@ -29,7 +30,7 @@
 - `include/`
   公共结构体和接口定义。
 - `src/`
-  用户态可测试的通用 resolver 实现。
+  用户态可测试的通用 resolver 与 AVC 关联实现。
 - `tests/`
   使用 mock kernel ops 的单元测试。
 - `kmod/lha_centos9_resolver.c`

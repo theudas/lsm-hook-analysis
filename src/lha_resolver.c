@@ -179,6 +179,8 @@ static const char *policy_state_to_string(uint8_t policy_state)
         return "allow";
     case LHA_POLICY_DENY:
         return "deny";
+    case LHA_POLICY_INFERRED_ALLOW:
+        return "inferred_allow";
     default:
         return "unknown";
     }

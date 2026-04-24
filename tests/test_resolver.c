@@ -1,3 +1,4 @@
+#include "lha_avc.h"
 #include "lha_json.h"
 #include "lha_resolver.h"
 
@@ -123,6 +124,23 @@ static int mock_policy_result(const struct lha_capture_event_v1 *event, char *bu
     return 0;
 }
 
+static void prepare_file_open_event(const struct lha_kernel_ops *ops,
+                                    struct lha_enriched_event_v1 *output)
+{
+    struct lha_capture_event_v1 input;
+
+    memset(&input, 0, sizeof(input));
+    input.version = 1;
+    input.hook_id = LHA_HOOK_FILE_OPEN;
+    input.ts_ns = 222;
+    input.ret = 0;
+    input.subject.task = (const void *)2;
+    input.subject.cred = (const void *)2;
+    input.args.file_open.file = (const void *)1;
+
+    assert(lha_resolve_event(ops, &input, output) == 0);
+}
+
 static void test_inode_permission(const struct lha_kernel_ops *ops)
 {
     struct lha_capture_event_v1 input;
@@ -169,22 +187,32 @@ static void test_policy_state_override(const struct lha_kernel_ops *ops)
     assert(strcmp(output.result.policy_result, "deny") == 0);
 }
 
-static void test_file_open(const struct lha_kernel_ops *ops)
+static void test_policy_state_inferred_allow(const struct lha_kernel_ops *ops)
 {
     struct lha_capture_event_v1 input;
     struct lha_enriched_event_v1 output;
-    char json[2048];
 
     memset(&input, 0, sizeof(input));
     input.version = 1;
     input.hook_id = LHA_HOOK_FILE_OPEN;
-    input.ts_ns = 222;
+    input.ts_ns = 212;
     input.ret = 0;
+    input.policy_state = LHA_POLICY_INFERRED_ALLOW;
     input.subject.task = (const void *)2;
     input.subject.cred = (const void *)2;
     input.args.file_open.file = (const void *)1;
 
     assert(lha_resolve_event(ops, &input, &output) == 0);
+    assert(strcmp(output.result.runtime_result, "allow") == 0);
+    assert(strcmp(output.result.policy_result, "inferred_allow") == 0);
+}
+
+static void test_file_open(const struct lha_kernel_ops *ops)
+{
+    struct lha_enriched_event_v1 output;
+    char json[2048];
+
+    prepare_file_open_event(ops, &output);
     assert(output.subject.tid == 5302u);
     assert(strcmp(output.subject.scontext, "u:r:subject_async_t:s0") == 0);
     assert(strcmp(output.request.perm, "open|read") == 0);
@@ -216,6 +244,73 @@ static void test_file_permission(const struct lha_kernel_ops *ops)
     assert(strcmp(output.result.policy_result, "deny") == 0);
 }
 
+static void test_avc_match_deny(const struct lha_kernel_ops *ops)
+{
+    struct lha_enriched_event_v1 output;
+    struct lha_avc_event_v1 avc;
+    struct lha_avc_match_options options;
+
+    prepare_file_open_event(ops, &output);
+    memset(&avc, 0, sizeof(avc));
+    memset(&options, 0, sizeof(options));
+
+    avc.timestamp_ns = output.timestamp_ns + 1000;
+    avc.pid = output.subject.pid;
+    avc.tid = output.subject.tid;
+    snprintf(avc.comm, sizeof(avc.comm), "%s", output.subject.comm);
+    snprintf(avc.scontext, sizeof(avc.scontext), "%s", output.subject.scontext);
+    snprintf(avc.tcontext, sizeof(avc.tcontext), "%s", output.target.tcontext);
+    snprintf(avc.tclass, sizeof(avc.tclass), "%s", output.target.tclass);
+    snprintf(avc.perm, sizeof(avc.perm), "%s", "open");
+    avc.permissive = 1;
+    avc.denied = 1;
+    options.window_ns = 50000;
+
+    assert(lha_apply_avc_policy_result(&output, &avc, 1, &options) == 0);
+    assert(strcmp(output.result.runtime_result, "allow") == 0);
+    assert(strcmp(output.result.policy_result, "deny") == 0);
+}
+
+static void test_avc_inferred_allow(const struct lha_kernel_ops *ops)
+{
+    struct lha_enriched_event_v1 output;
+
+    prepare_file_open_event(ops, &output);
+    assert(lha_apply_avc_policy_result(&output, NULL, 0, NULL) == 0);
+    assert(strcmp(output.result.policy_result, "inferred_allow") == 0);
+}
+
+static void test_avc_unknown_missing_keys(const struct lha_kernel_ops *ops)
+{
+    struct lha_enriched_event_v1 output;
+
+    prepare_file_open_event(ops, &output);
+    output.target.tcontext[0] = '\0';
+    assert(lha_apply_avc_policy_result(&output, NULL, 0, NULL) == 0);
+    assert(strcmp(output.result.policy_result, "unknown") == 0);
+}
+
+static void test_avc_ambiguous_match(const struct lha_kernel_ops *ops)
+{
+    struct lha_enriched_event_v1 output;
+    struct lha_avc_event_v1 avc[2];
+
+    prepare_file_open_event(ops, &output);
+    memset(avc, 0, sizeof(avc));
+
+    for (size_t i = 0; i < 2; ++i) {
+        avc[i].timestamp_ns = output.timestamp_ns + 1000;
+        snprintf(avc[i].scontext, sizeof(avc[i].scontext), "%s", output.subject.scontext);
+        snprintf(avc[i].tcontext, sizeof(avc[i].tcontext), "%s", output.target.tcontext);
+        snprintf(avc[i].tclass, sizeof(avc[i].tclass), "%s", output.target.tclass);
+        snprintf(avc[i].perm, sizeof(avc[i].perm), "%s", "open");
+        avc[i].denied = 1;
+    }
+
+    assert(lha_apply_avc_policy_result(&output, avc, 2, NULL) == 0);
+    assert(strcmp(output.result.policy_result, "unknown") == 0);
+}
+
 int main(void)
 {
     struct lha_kernel_ops ops;
@@ -230,8 +325,13 @@ int main(void)
 
     test_inode_permission(&ops);
     test_policy_state_override(&ops);
+    test_policy_state_inferred_allow(&ops);
     test_file_open(&ops);
     test_file_permission(&ops);
+    test_avc_match_deny(&ops);
+    test_avc_inferred_allow(&ops);
+    test_avc_unknown_missing_keys(&ops);
+    test_avc_ambiguous_match(&ops);
 
     puts("ok");
     return 0;
