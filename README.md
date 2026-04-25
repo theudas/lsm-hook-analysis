@@ -1,8 +1,8 @@
 # lsm-hook-analysis
 
-`lsm-hook-analysis` 是一个面向 SELinux LSM hook 事件的资源访问解析项目。它不负责直接抓取 hook，而是接收外部抓取模块传入的 `task/cred/inode/file/mask/ret` 等内核对象和结果，在内核态解析出主体、目标资源、访问权限、SELinux 上下文、路径和运行结果，并输出统一结构化事件或 JSON。
+`lsm-hook-analysis` 是一个面向 SELinux LSM hook 事件的内核态资源访问解析项目。它不直接抓取 hook，而是接收外部抓取模块传入的 `task/cred/inode/file/mask/ret` 等内核对象和结果，在内核态解析出主体、目标资源、访问权限、SELinux 上下文、路径和运行结果，并输出统一结构化事件或 JSON。
 
-它对应的是异常行为分析链路中的“LSM hook 追踪到的真实资源访问路径分析”能力。
+当前仓库只保留 CentOS Stream 9 相关的内核态实现，用户态原型、测试和回放工具已移除。
 
 ## 当前能力
 
@@ -18,44 +18,28 @@
 - 请求信息：`mask_raw`、`obj_type`、`perm`
 - 目标资源：`dev`、`ino`、`type`、`path`、`tclass`、`tcontext`
 - 结果信息：`ret`、`runtime_result`、`policy_result`
-- 用户态 AVC 关联辅助：基于 `include/lha_avc.h` 将 enriched hook event 与 AVC deny 事件关联，输出 `deny`、`inferred_allow` 或 `unknown`
 - JSON 格式化结果
-
-其中 `policy_result` 需要由调用方额外提供真实策略判定来源；如果 `struct lha_capture_event_v1.policy_state` 未填写，CentOS Stream 9 内核模块版本会回退为 `unknown`。
+- 内核态 AVC 关联结果：`deny`、`inferred_allow` 或 `unknown`
 
 ## 模块结构
 
-仓库分为用户态解析框架和内核态运行模块两部分：
-
-- `include/`
-  公共结构体和接口定义。
-- `src/`
-  用户态可测试的通用 resolver 与 AVC 关联实现。
-- `tests/`
-  使用 mock kernel ops 的单元测试。
 - `kmod/lha_centos9_resolver.c`
   生产可用的 CentOS Stream 9 内核态 resolver 模块。
 - `kmod/lha_centos9_injector.c`
   仅用于 debugfs 假事件注入和自测的独立测试模块。
+- `kmod/lha_centos9_resolver.h`
+  外部抓取模块接入时使用的结构体和导出 API。
 - `docs/`
   接口、运行和使用文档。
 
 `kmod/` 会构建出两个内核模块：
 
 - `lha_centos9_resolver.ko`
-  生产模块，导出 `lha_centos9_resolve_event()` 和 `lha_centos9_format_json()`。
+  生产模块，导出 `lha_centos9_resolve_event()`、`lha_centos9_format_json()` 和 AVC 关联辅助 API。
 - `lha_centos9_injector.ko`
   自测模块，通过 resolver 导出的 API 构造假事件并输出最近一次 JSON。
 
 ## 快速开始
-
-用户态验证：
-
-```bash
-make
-make test
-make replay-avc
-```
 
 内核模块编译和运行需要在 Linux/CentOS Stream 9 环境中进行：
 
@@ -78,15 +62,6 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 - `docs/usage.md`
 
-AVC 重放验证：
-
-```bash
-./build/replay_avc --help
-./build/replay_avc
-```
-
-默认会使用一组内置的 `entrypoint deny` 样例；你也可以把虚拟机里 `ausearch` 拿到的字段通过命令行参数覆盖进去。
-
 ## 对外接入方式
 
 外部抓取模块需要：
@@ -95,7 +70,8 @@ AVC 重放验证：
 2. 组装 `struct lha_capture_event_v1`。
 3. 在 workqueue/kthread 等可睡眠上下文中调用 `lha_centos9_resolve_event()`。
 4. 如需 JSON，再调用 `lha_centos9_format_json()`。
-5. 调用方自己释放此前保存的引用。
+5. 如需基于 AVC deny 判定 `policy_result`，再调用 `lha_centos9_apply_avc_policy_result()`。
+6. 调用方自己释放此前保存的引用。
 
 详细 API 说明请看：
 
@@ -105,6 +81,7 @@ AVC 重放验证：
 
 - 本项目当前不负责注册或抓取真实 LSM hook。
 - 真实生产链路需要外部抓取模块把 hook 参数和返回值传给 resolver。
+- 真实生产链路还需要外部来源提供 AVC 事件，再交给 resolver 侧做关联。
 - `file *` 路径恢复通常更接近用户空间看到的真实路径。
 - `inode *` 路径恢复是 best effort，不保证是全局绝对路径。
 - `lha_centos9_injector.ko` 只是自测模块，不建议作为生产入口。

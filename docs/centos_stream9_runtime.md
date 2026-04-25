@@ -2,19 +2,14 @@
 
 ## 1. 代码运行在什么地方
 
-这套代码分成两层：
+当前仓库只保留 `kmod/` 这条内核态运行路径。
 
-- `include/` + `src/` + `tests/`
-  这是当前已经跑通的“解析框架层”，主要用于把事件模型、hook 路由、权限语义解码和 JSON 格式定下来。
-- `kmod/`
-  这是面向 CentOS Stream 9 的“内核运行层”，它才是实际部署到服务器上的版本。
-  现在 `kmod/` 内又拆成两个模块：
-  - `lha_centos9_resolver.ko`
-    生产可用的 resolver API 模块
-  - `lha_centos9_injector.ko`
-    仅用于 debugfs 假事件注入和自测的测试模块
+`kmod/` 内拆成两个模块：
 
-真正部署时，关键逻辑运行在 **内核态**，而不是用户态。
+- `lha_centos9_resolver.ko`
+  生产可用的 resolver API 模块
+- `lha_centos9_injector.ko`
+  仅用于 debugfs 假事件注入和自测的测试模块
 
 更准确地说：
 
@@ -33,7 +28,7 @@
    - 路径
 4. 解析后的事件再被格式化成 JSON，或者作为结构化数据继续往外送
 
-因此，这份代码不是“用户态命令行工具”，而是：
+因此，这份代码的定位是：
 
 - 一个可加载的生产 resolver 模块
 - 一个可选的自测 injector 模块
@@ -304,7 +299,8 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 当前项目里：
 
-- `src/` 是“框架版参考实现”
-- `kmod/` 是“真正准备跑在 CentOS Stream 9 服务器上的实现方向”
+- `kmod/` 是当前唯一保留的实现主线
+- `lha_centos9_resolver.ko` 是生产侧解析模块
+- `lha_centos9_injector.ko` 是自测辅助模块
 
-如果你的目标是服务器实际部署，那么后续主要应继续推进 `kmod/` 目录，而不是把 `src/` 当成最终运行形态。
+如果你的目标是服务器实际部署，后续主要应继续推进 `kmod/` 目录和外部抓取模块的对接。

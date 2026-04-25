@@ -622,9 +622,9 @@ struct lha_enriched_event_v1 {
 
 v1 不做以下事情：
 
-- 用户态 mock `current`
-- 用户态回读 `/proc/self/attr/current` 伪装成 hook 现场主体
-- 用户态 `getxattr()` 伪装成目标对象 hook 现场 SELinux 状态
+- 在非 hook 现场伪造 `current`
+- 通过回读用户空间接口伪装 hook 现场主体
+- 通过用户空间属性读取伪装目标对象的 SELinux 状态
 - 为了“看起来完整”而伪造 context
 - 在文档里强行承诺 `policy_result` 一定能得到
 
