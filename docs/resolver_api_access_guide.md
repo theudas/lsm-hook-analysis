@@ -33,6 +33,7 @@ resolver 负责：
 
 - `lha_centos9_resolve_event()`
 - `lha_centos9_format_json()`
+- `lha_centos9_record_avc_event()`
 
 实现位置：
 
@@ -46,13 +47,15 @@ int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
 			      struct lha_enriched_event_v1 *out);
 
 int lha_centos9_format_json(const struct lha_enriched_event_v1 *event,
-			    char *buf,
-			    size_t buf_len);
+				    char *buf,
+				    size_t buf_len);
+
+int lha_centos9_record_avc_event(const struct lha_avc_event_v1 *event);
 ```
 
 注意：
 
-- 这两个符号通过 `EXPORT_SYMBOL_GPL` 导出，调用方模块需要是 GPL 兼容模块。
+- 这些符号通过 `EXPORT_SYMBOL_GPL` 导出，调用方模块需要是 GPL 兼容模块。
 - `lha_centos9_resolve_event()` 成功返回 `0`，失败返回负错误码。
 - `lha_centos9_format_json()` 在当前内核模块实现里成功返回 `0`，失败返回负错误码。
 - `lha_centos9_resolver.ko` 是生产可用的 resolver API 模块。
@@ -113,6 +116,8 @@ int lha_centos9_format_json(const struct lha_enriched_event_v1 *event,
 5. 在 worker 中调用 `lha_centos9_resolve_event()`
 6. 如需字符串结果，再调用 `lha_centos9_format_json()`
 7. 调用方释放此前建立的引用
+
+AVC deny 事件不随 `struct lha_capture_event_v1` 传入。生产环境可以加载 `lha_centos9_avc_capture.ko`，或者由你们自己的 AVC 抓取模块调用 `lha_centos9_record_avc_event()` 写入 resolver 内部缓存；主解析接口会自动匹配该缓存并更新 `policy_result`。
 
 相关实现位置：
 
@@ -346,7 +351,7 @@ if (!rc) {
 - 不要在不可睡眠上下文直接调用 resolver。
 - `inode_permission` 只有 `inode`，路径恢复是 best effort，不保证是全局绝对路径。
 - `file_open/file_permission` 因为持有 `file->f_path`，通常更容易恢复出接近真实访问路径的结果。
-- 当前 `policy_result` 需要调用方在 `struct lha_capture_event_v1.policy_state` 中显式提供；未提供时会回退为 `unknown`。
+- 当前 `policy_result` 会在主解析完成后自动使用 resolver 内部 AVC 缓存更新；没有可匹配 AVC 且匹配字段完整时会输出 `inferred_allow`。
 - 如果调用方与 resolver 模块分开加载，推荐先加载 `lha_centos9_resolver.ko`，再加载抓取模块。
 
 相关实现位置：

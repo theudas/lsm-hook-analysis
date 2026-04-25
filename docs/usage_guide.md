@@ -28,15 +28,17 @@ make
 make KDIR=/path/to/kernel/build
 ```
 
-会生成两个模块：
+会生成三个模块：
 
 - `lha_centos9_resolver.ko`
 - `lha_centos9_injector.ko`
+- `lha_centos9_avc_capture.ko`
 
 其中：
 
 - `lha_centos9_resolver.ko` 是生产接入时真正依赖的解析模块
 - `lha_centos9_injector.ko` 只是 debugfs 自测模块
+- `lha_centos9_avc_capture.ko` 是可选的 AVC 抓取模块
 
 ## 3. 卸载旧模块
 
@@ -50,6 +52,7 @@ lsmod | grep lha
 
 ```bash
 sudo rmmod lha_centos9_injector
+sudo rmmod lha_centos9_avc_capture
 sudo rmmod lha_centos9_resolver
 ```
 
@@ -67,6 +70,12 @@ sudo insmod lha_centos9_resolver.ko
 
 ```bash
 sudo insmod lha_centos9_injector.ko
+```
+
+如果要让 resolver 自动关联真实 AVC deny，再加载：
+
+```bash
+sudo insmod lha_centos9_avc_capture.ko
 ```
 
 加载后可检查：
@@ -158,8 +167,10 @@ cat /sys/kernel/debug/lha_centos9/last_json
 3. 外部抓取模块组装 `struct lha_capture_event_v1`
 4. 在 workqueue 或 kthread 中调用 `lha_centos9_resolve_event()`
 5. 如需 JSON，再调用 `lha_centos9_format_json()`
-6. 如需基于 AVC deny 决定 `policy_result`，再调用 `lha_centos9_apply_avc_policy_result()`
+6. `lha_centos9_resolve_event()` 会在主解析完成后自动匹配 resolver 内部 AVC 缓存
 7. 外部抓取模块负责释放引用
+
+AVC 缓存可以由 `lha_centos9_avc_capture.ko` 自动写入，也可以由你们自己的 AVC 抓取模块调用 `lha_centos9_record_avc_event()` 写入。
 
 详细接入方式见 `docs/api.md`。
 

@@ -12,7 +12,14 @@
 #include <linux/sched.h>
 #include <linux/security.h>
 #include <linux/slab.h>
+#include <linux/spinlock.h>
 #include <linux/string.h>
+
+#define LHA_AVC_CACHE_LEN 128
+
+static DEFINE_SPINLOCK(lha_avc_cache_lock);
+static struct lha_avc_event_v1 lha_avc_cache[LHA_AVC_CACHE_LEN];
+static size_t lha_avc_cache_next;
 
 static void lha_copy_string(char *dst, size_t dst_len, const char *src)
 {
@@ -545,6 +552,8 @@ enum lha_policy_result_kind lha_centos9_correlate_avc_policy(
 
 	if (!lha_event_has_match_keys(event))
 		return LHA_POLICY_RESULT_UNKNOWN;
+	if (avc_count != 0 && !avc_events)
+		return LHA_POLICY_RESULT_UNKNOWN;
 
 	for (i = 0; i < avc_count; ++i) {
 		u64 delta = 0;
@@ -596,6 +605,48 @@ int lha_centos9_apply_avc_policy_result(
 	return 0;
 }
 EXPORT_SYMBOL_GPL(lha_centos9_apply_avc_policy_result);
+
+int lha_centos9_record_avc_event(const struct lha_avc_event_v1 *event)
+{
+	unsigned long flags;
+	size_t index;
+
+	if (!event)
+		return -EINVAL;
+	if (!lha_avc_event_has_match_keys(event))
+		return -EINVAL;
+
+	spin_lock_irqsave(&lha_avc_cache_lock, flags);
+	index = lha_avc_cache_next++ % ARRAY_SIZE(lha_avc_cache);
+	lha_avc_cache[index] = *event;
+	spin_unlock_irqrestore(&lha_avc_cache_lock, flags);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(lha_centos9_record_avc_event);
+
+static int lha_apply_cached_avc_policy_result(struct lha_enriched_event_v1 *event)
+{
+	struct lha_avc_match_options options = {
+		.window_ns = LHA_DEFAULT_AVC_WINDOW_NS,
+	};
+	enum lha_policy_result_kind kind;
+	unsigned long flags;
+
+	if (!event)
+		return -EINVAL;
+
+	spin_lock_irqsave(&lha_avc_cache_lock, flags);
+	kind = lha_centos9_correlate_avc_policy(event, lha_avc_cache,
+						 ARRAY_SIZE(lha_avc_cache),
+						 &options);
+	spin_unlock_irqrestore(&lha_avc_cache_lock, flags);
+
+	lha_copy_string(event->result.policy_result,
+			sizeof(event->result.policy_result),
+			lha_centos9_policy_result_kind_to_string(kind));
+	return 0;
+}
 
 static int lha_resolve_inode_permission(const struct lha_capture_event_v1 *in,
 					struct lha_enriched_event_v1 *out)
@@ -676,6 +727,8 @@ static int lha_resolve_file_permission(const struct lha_capture_event_v1 *in,
 int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
 			      struct lha_enriched_event_v1 *out)
 {
+	int rc;
+
 	if (!in || !out || in->version != 1)
 		return -EINVAL;
 	if (!in->subject.task || !in->subject.cred)
@@ -688,14 +741,22 @@ int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
 
 	switch (in->hook_id) {
 	case LHA_HOOK_INODE_PERMISSION:
-		return lha_resolve_inode_permission(in, out);
+		rc = lha_resolve_inode_permission(in, out);
+		break;
 	case LHA_HOOK_FILE_OPEN:
-		return lha_resolve_file_open(in, out);
+		rc = lha_resolve_file_open(in, out);
+		break;
 	case LHA_HOOK_FILE_PERMISSION:
-		return lha_resolve_file_permission(in, out);
+		rc = lha_resolve_file_permission(in, out);
+		break;
 	default:
 		return -EINVAL;
 	}
+
+	if (rc)
+		return rc;
+
+	return lha_apply_cached_avc_policy_result(out);
 }
 EXPORT_SYMBOL_GPL(lha_centos9_resolve_event);
 

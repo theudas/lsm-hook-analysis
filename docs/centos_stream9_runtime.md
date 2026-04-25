@@ -4,12 +4,14 @@
 
 当前仓库只保留 `kmod/` 这条内核态运行路径。
 
-`kmod/` 内拆成两个模块：
+`kmod/` 内拆成三个模块：
 
 - `lha_centos9_resolver.ko`
   生产可用的 resolver API 模块
 - `lha_centos9_injector.ko`
   仅用于 debugfs 假事件注入和自测的测试模块
+- `lha_centos9_avc_capture.ko`
+  可选 AVC 抓取模块，把 SELinux AVC deny 写入 resolver 内部缓存
 
 更准确地说：
 
@@ -31,6 +33,7 @@
 因此，这份代码的定位是：
 
 - 一个可加载的生产 resolver 模块
+- 一个可选的 AVC 抓取模块
 - 一个可选的自测 injector 模块
 - 或者一个和现有抓取模块链接在一起的内核侧库
 
@@ -102,14 +105,24 @@
   - `tclass`
   - `perm`
 - 生成统一结构化结果
+- 自动匹配内部 AVC 缓存并更新 `policy_result`
 - 将结果格式化成 JSON
 
 它对外导出：
 
 - `lha_centos9_resolve_event()`
 - `lha_centos9_format_json()`
+- `lha_centos9_record_avc_event()`
 
-### 4.2 `lha_centos9_injector.ko`
+### 4.2 `lha_centos9_avc_capture.ko`
+
+`kmod/lha_centos9_avc_capture.c` 负责采集 SELinux AVC 审计事件：
+
+- 注册 `selinux_audited` tracepoint probe
+- 把 AVC deny 事件归一化成 `struct lha_avc_event_v1`
+- 调用 `lha_centos9_record_avc_event()` 写入 resolver 内部缓存
+
+### 4.3 `lha_centos9_injector.ko`
 
 `kmod/lha_centos9_injector.c` 不参与生产解析链路，它的职责是：
 
@@ -168,8 +181,9 @@ sudo insmod lha_centos9_resolver.ko
 如果你的抓取模块和 resolver 是分开的，那么典型加载顺序是：
 
 1. 先加载 `lha_centos9_resolver.ko`
-2. 再加载抓取 hook 参数/返回值的模块
-3. 抓取模块在收到原始事件后调用：
+2. 如果需要真实 AVC 关联，再加载 `lha_centos9_avc_capture.ko`
+3. 再加载抓取 hook 参数/返回值的模块
+4. 抓取模块在收到原始事件后调用：
    `lha_centos9_resolve_event()`
 
 如果你还需要做假事件注入自测，再额外加载：
@@ -270,30 +284,17 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 它不是正式业务入口，只是为了方便调试和自测。
 
-## 7. 当前还没完全解决的点
+## 7. `policy_result` 说明
 
-当前 `kmod/` 版本还保留一个明确未完成字段：
+`policy_result` 现在由 resolver 主解析接口自动处理：
 
-- `policy_result`
+- 如果 resolver 内部 AVC 缓存中存在匹配 deny，输出 `deny`。
+- 如果匹配字段完整但窗口内没有 deny，输出 `inferred_allow`。
+- 如果缺少关键匹配字段，输出 `unknown`。
 
-现在仍然默认输出：
+内部 AVC 缓存可以由 `lha_centos9_avc_capture.ko` 自动写入，也可以由外部 AVC 抓取模块调用 `lha_centos9_record_avc_event()` 写入。
 
-- `unknown`
-
-原因很简单：
-
-- `ret` 只能告诉你运行时结果
-- 不能可靠代表 permissive 模式下的真实策略判定
-
-所以当前内核模块已经可以比较完整地得到：
-
-- `subject`
-- `request`
-- `target`
-- `ret`
-- `runtime_result`
-
-但 `policy_result` 还需要后续单独补策略判定路径。
+注意：`ret` 仍然只表示 hook 的运行时返回值，不能单独代表 permissive 模式下的真实策略判定。
 
 ## 8. 你现在应该怎么理解整个项目
 
@@ -301,6 +302,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 - `kmod/` 是当前唯一保留的实现主线
 - `lha_centos9_resolver.ko` 是生产侧解析模块
+- `lha_centos9_avc_capture.ko` 是 AVC 抓取辅助模块
 - `lha_centos9_injector.ko` 是自测辅助模块
 
 如果你的目标是服务器实际部署，后续主要应继续推进 `kmod/` 目录和外部抓取模块的对接。

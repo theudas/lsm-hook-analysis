@@ -104,7 +104,6 @@ static int lha_run_injected_event(struct lha_capture_event_v1 *event,
 {
 	struct lha_enriched_event_v1 *out;
 	struct lha_avc_event_v1 avc;
-	struct lha_avc_match_options options;
 	char *json;
 	int rc;
 
@@ -118,19 +117,18 @@ static int lha_run_injected_event(struct lha_capture_event_v1 *event,
 		return -ENOMEM;
 	}
 
-	rc = lha_centos9_resolve_event(event, out);
-	if (rc)
-		goto out_free;
-
-	memset(&options, 0, sizeof(options));
-	options.window_ns = LHA_DEFAULT_AVC_WINDOW_NS;
-
 	if (inject_matching_avc_deny) {
+		rc = lha_centos9_resolve_event(event, out);
+		if (rc)
+			goto out_free;
+
 		lha_build_matching_avc_event(out, &avc);
-		rc = lha_centos9_apply_avc_policy_result(out, &avc, 1, &options);
-	} else {
-		rc = lha_centos9_apply_avc_policy_result(out, NULL, 0, &options);
+		rc = lha_centos9_record_avc_event(&avc);
+		if (rc)
+			goto out_free;
 	}
+
+	rc = lha_centos9_resolve_event(event, out);
 	if (rc)
 		goto out_free;
 

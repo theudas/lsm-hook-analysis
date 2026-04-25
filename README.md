@@ -27,17 +27,21 @@
   生产可用的 CentOS Stream 9 内核态 resolver 模块。
 - `kmod/lha_centos9_injector.c`
   仅用于 debugfs 假事件注入和自测的独立测试模块。
+- `kmod/lha_centos9_avc_capture.c`
+  独立 AVC 抓取模块，采集 SELinux AVC 审计事件并写入 resolver 内部缓存。
 - `kmod/lha_centos9_resolver.h`
   外部抓取模块接入时使用的结构体和导出 API。
 - `docs/`
   接口、运行和使用文档。
 
-`kmod/` 会构建出两个内核模块：
+`kmod/` 会构建出三个内核模块：
 
 - `lha_centos9_resolver.ko`
   生产模块，导出 `lha_centos9_resolve_event()`、`lha_centos9_format_json()` 和 AVC 关联辅助 API。
 - `lha_centos9_injector.ko`
   自测模块，通过 resolver 导出的 API 构造假事件并输出最近一次 JSON。
+- `lha_centos9_avc_capture.ko`
+  AVC 抓取模块，把采集到的 AVC deny 事件交给 resolver 缓存。
 
 ## 快速开始
 
@@ -70,7 +74,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 2. 组装 `struct lha_capture_event_v1`。
 3. 在 workqueue/kthread 等可睡眠上下文中调用 `lha_centos9_resolve_event()`。
 4. 如需 JSON，再调用 `lha_centos9_format_json()`。
-5. 如需基于 AVC deny 判定 `policy_result`，再调用 `lha_centos9_apply_avc_policy_result()`。
+5. 如需基于 AVC deny 判定 `policy_result`，加载 `lha_centos9_avc_capture.ko` 或由外部 AVC 模块调用 `lha_centos9_record_avc_event()`；主解析接口会自动匹配 resolver 内部缓存。
 6. 调用方自己释放此前保存的引用。
 
 详细 API 说明请看：
@@ -81,7 +85,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 - 本项目当前不负责注册或抓取真实 LSM hook。
 - 真实生产链路需要外部抓取模块把 hook 参数和返回值传给 resolver。
-- 真实生产链路还需要外部来源提供 AVC 事件，再交给 resolver 侧做关联。
+- 真实生产链路可以加载 `lha_centos9_avc_capture.ko`，或由你们自己的 AVC 抓取模块调用 resolver 的 AVC 记录接口。
 - `file *` 路径恢复通常更接近用户空间看到的真实路径。
 - `inode *` 路径恢复是 best effort，不保证是全局绝对路径。
 - `lha_centos9_injector.ko` 只是自测模块，不建议作为生产入口。
