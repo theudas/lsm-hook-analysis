@@ -60,7 +60,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 完整步骤请看：
 
-- `docs/usage.md`
+- `docs/usage_guide.md`
 
 ## 对外接入方式
 
@@ -75,7 +75,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 详细 API 说明请看：
 
-- `docs/api.md`
+- `docs/resolver_api_access_guide.md`
 
 ## 重要边界
 
@@ -88,9 +88,9 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 ## 文档
 
-- `docs/usage.md`
+- `docs/usage_guide.md`
   从克隆项目到编译、加载模块、假事件注入的完整操作说明。
-- `docs/api.md`
+- `docs/resolver_api_access_guide.md`
   外部模块如何调用 resolver API。
 - `docs/interface_contract.md`
   v1 输入输出接口约束。
