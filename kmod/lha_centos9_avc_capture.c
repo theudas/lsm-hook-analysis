@@ -16,6 +16,8 @@
 #define LHA_SELINUX_PERM_APPEND  BIT(9)
 #define LHA_SELINUX_PERM_EXECUTE BIT(14)
 #define LHA_SELINUX_PERM_OPEN    BIT(18)
+#define LHA_SELINUX_PERM_EXECUTE_NO_TRANS BIT(25)
+#define LHA_SELINUX_PERM_ENTRYPOINT BIT(26)
 #define LHA_SELINUX_DIR_SEARCH   BIT(28)
 
 /*
@@ -91,7 +93,9 @@ static void lha_decode_avc_perm(const char *tclass, u32 denied,
 	if (tclass && strcmp(tclass, "dir") == 0) {
 		if (denied & LHA_SELINUX_DIR_SEARCH)
 			lha_append_perm(buf, buf_len, "search");
-	} else if (denied & LHA_SELINUX_PERM_EXECUTE) {
+	} else if (denied & (LHA_SELINUX_PERM_EXECUTE |
+			     LHA_SELINUX_PERM_EXECUTE_NO_TRANS |
+			     LHA_SELINUX_PERM_ENTRYPOINT)) {
 		lha_append_perm(buf, buf_len, "exec");
 	}
 }
@@ -124,8 +128,8 @@ static void lha_avc_trace_probe(void *data,
 	lha_decode_avc_perm(tclass, sad->denied, event.perm, sizeof(event.perm));
 
 	if (lha_avc_capture_debug)
-		pr_info("lha_centos9_avc_capture: captured avc deny pid=%u tid=%u comm=%s permissive=%u tclass=%s perm=%s scontext=%s tcontext=%s\n",
-			event.pid, event.tid, event.comm, event.permissive,
+		pr_info("lha_centos9_avc_capture: captured avc deny pid=%u tid=%u comm=%s permissive=%u denied_mask=0x%x tclass=%s perm=%s scontext=%s tcontext=%s\n",
+			event.pid, event.tid, event.comm, event.permissive, sad->denied,
 			event.tclass, event.perm, event.scontext, event.tcontext);
 
 	rc = lha_centos9_record_avc_event(&event);

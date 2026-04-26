@@ -34,6 +34,29 @@ resolver 自己不负责注册或抓取这些 hook。真实生产链路里，hoo
 - `lha_centos9_record_avc_event()`
   向 resolver 内部 AVC 缓存写入一条 deny 事件
 
+## 2.1 调试开关
+
+当前模块提供一个可动态修改的调试参数：
+
+- `debug_avc_cache`
+
+开启后会额外打印：
+
+- AVC 事件被拒绝入缓存的原因
+- AVC 事件成功写入环形缓存时的下标和关键字段
+
+加载时开启：
+
+```bash
+sudo insmod lha_centos9_resolver.ko debug_avc_cache=1
+```
+
+模块已加载后在线开启：
+
+```bash
+echo 1 | sudo tee /sys/module/lha_centos9_resolver/parameters/debug_avc_cache
+```
+
 ## 3. 输入与输出
 
 输入结构是 `struct lha_capture_event_v1`，关键字段包括：

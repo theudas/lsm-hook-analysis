@@ -44,7 +44,30 @@
 
 如果找不到该 tracepoint，模块初始化会失败并返回 `-ENOENT`。
 
-## 5. 采集与归一化逻辑
+## 5. 调试开关
+
+当前模块提供一个可动态修改的调试参数：
+
+- `debug_capture`
+
+它开启后会额外打印：
+
+- probe 是否抓到了一条真实 AVC deny
+- 这条事件是否成功转发给 resolver
+
+加载时开启：
+
+```bash
+sudo insmod lha_centos9_avc_capture.ko debug_capture=1
+```
+
+模块已加载后在线开启：
+
+```bash
+echo 1 | sudo tee /sys/module/lha_centos9_avc_capture/parameters/debug_capture
+```
+
+## 6. 采集与归一化逻辑
 
 probe 函数签名与当前目标 tracepoint 对齐，能接收到：
 
@@ -77,7 +100,7 @@ probe 函数签名与当前目标 tracepoint 对齐，能接收到：
 
 最后调用 `lha_centos9_record_avc_event()` 写入 resolver 缓存。
 
-## 6. deny 权限位到 `perm` 的映射
+## 7. deny 权限位到 `perm` 的映射
 
 当前模块只把一部分常用 deny 位解码成 resolver 侧使用的权限字符串：
 
@@ -95,11 +118,11 @@ probe 函数签名与当前目标 tracepoint 对齐，能接收到：
 - 命中 `APPEND` 位 -> `append`
 - 未命中 `APPEND` 但命中 `WRITE` 位 -> `write`
 - `tclass == "dir"` 且命中目录搜索位 -> `search`
-- 非目录目标且命中执行位 -> `exec`
+- 非目录目标且命中 `execute`、`execute_no_trans` 或 `entrypoint` -> `exec`
 
 这套映射是为了和 resolver 生成的 `request.perm` 使用同一套命名，从而支持字符串级匹配。
 
-## 7. 与 resolver 的配合方式
+## 8. 与 resolver 的配合方式
 
 推荐链路是：
 
@@ -111,7 +134,30 @@ probe 函数签名与当前目标 tracepoint 对齐，能接收到：
 
 如果未命中 deny，resolver 会输出 `inferred_allow` 或 `unknown`，具体取决于匹配键是否完整、是否出现歧义。
 
-## 8. 局限性
+## 9. 如何验证 capture 是否真的工作
+
+建议同时打开：
+
+- `lha_centos9_avc_capture.debug_capture=1`
+- `lha_centos9_resolver.debug_avc_cache=1`
+
+然后执行：
+
+```bash
+sudo dmesg -w
+```
+
+如果一条真实 AVC deny 被成功写入 resolver 缓冲区，通常会看到：
+
+```text
+lha_centos9_avc_capture: captured avc deny ...
+lha_centos9_avc_capture: forwarded avc deny to resolver cache ...
+lha_centos9_resolver: cached avc deny index=...
+```
+
+如果只能看到 `captured avc deny`，但后面出现 `failed to forward ... -22`，说明这条事件没有满足 resolver 的入缓存条件。
+
+## 10. 局限性
 
 当前模块的局限包括：
 
