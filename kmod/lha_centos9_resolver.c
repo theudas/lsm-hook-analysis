@@ -196,20 +196,6 @@ static void lha_classify_runtime_result(int ret, char *buf, size_t buf_len)
 	lha_copy_string(buf, buf_len, "error");
 }
 
-static const char *lha_policy_state_to_string(__u8 policy_state)
-{
-	switch (policy_state) {
-	case LHA_POLICY_ALLOW:
-		return "allow";
-	case LHA_POLICY_DENY:
-		return "deny";
-	case LHA_POLICY_INFERRED_ALLOW:
-		return "inferred_allow";
-	default:
-		return "unknown";
-	}
-}
-
 static bool lha_string_present(const char *text)
 {
 	return text && text[0] != '\0';
@@ -521,7 +507,7 @@ static void lha_fill_result(const struct lha_capture_event_v1 *in,
 				    sizeof(result->runtime_result));
 	lha_copy_string(result->policy_result,
 			sizeof(result->policy_result),
-			lha_policy_state_to_string(in->policy_state));
+			"unknown");
 }
 
 const char *lha_centos9_policy_result_kind_to_string(enum lha_policy_result_kind kind)

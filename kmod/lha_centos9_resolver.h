@@ -30,13 +30,6 @@ enum lha_hook_id {
 	LHA_HOOK_FILE_PERMISSION = 3,
 };
 
-enum lha_policy_state {
-	LHA_POLICY_UNKNOWN = 0,
-	LHA_POLICY_ALLOW = 1,
-	LHA_POLICY_DENY = 2,
-	LHA_POLICY_INFERRED_ALLOW = 3,
-};
-
 enum lha_policy_result_kind {
 	LHA_POLICY_RESULT_UNKNOWN = 0,
 	LHA_POLICY_RESULT_DENY = 1,
@@ -67,8 +60,6 @@ struct lha_capture_event_v1 {
 	__u16 hook_id;
 	__u64 ts_ns;
 	__s32 ret;
-	__u8 policy_state;
-	__u8 reserved[3];
 	struct {
 		struct task_struct *task;
 		const struct cred *cred;

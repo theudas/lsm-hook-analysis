@@ -32,8 +32,6 @@ struct lha_capture_event_v1 {
 	__u16 hook_id;
 	__u64 ts_ns;
 	__s32 ret;
-	__u8 policy_state;
-	__u8 reserved[3];
 	struct {
 		struct task_struct *task;
 		const struct cred *cred;
@@ -77,26 +75,6 @@ struct lha_capture_event_v1 {
   需要填写 `args.file_open.file`
 - `LHA_HOOK_FILE_PERMISSION`
   需要填写 `args.file_permission.file` 和 `args.file_permission.mask`
-
-### 2.3 `policy_state` 的当前语义
-
-`policy_state` 在头文件中定义为：
-
-```c
-enum lha_policy_state {
-	LHA_POLICY_UNKNOWN = 0,
-	LHA_POLICY_ALLOW = 1,
-	LHA_POLICY_DENY = 2,
-	LHA_POLICY_INFERRED_ALLOW = 3,
-};
-```
-
-当前实现里它只会先被写入 `result.policy_result` 的初值，但 `lha_centos9_resolve_event()` 在返回前会再执行一次“内部 AVC 缓存关联”，并用关联结果覆盖该字段。
-
-因此：
-
-- 这个字段在当前主解析路径中不是最终判定来源
-- 最终输出仍以 resolver 内置 AVC 关联结果为准
 
 ## 3. 输出结构
 

@@ -97,7 +97,7 @@ echo 1 | sudo tee /sys/module/lha_centos9_resolver/parameters/debug_avc_cache
 7. 根据 `ret` 生成 `runtime_result`。
 8. 使用 resolver 内部 AVC 缓存重新计算 `policy_result`。
 
-注意：输入里的 `policy_state` 会先写入 `result.policy_result`，但在 `lha_centos9_resolve_event()` 成功返回前，会被“内部 AVC 缓存关联结果”覆盖。因此当前主解析路径里最终输出的 `policy_result` 以缓存关联结果为准，而不是以输入 `policy_state` 为准。
+当前实现里，`policy_result` 在进入 AVC 关联前会先初始化成 `unknown`，随后再由 resolver 内部 AVC 缓存关联逻辑更新。
 
 ## 5. 各字段如何生成
 
