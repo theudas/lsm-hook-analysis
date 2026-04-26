@@ -16,8 +16,6 @@
 #define LHA_SELINUX_PERM_APPEND  BIT(9)
 #define LHA_SELINUX_PERM_EXECUTE BIT(14)
 #define LHA_SELINUX_PERM_OPEN    BIT(18)
-#define LHA_SELINUX_PERM_EXECUTE_NO_TRANS BIT(25)
-#define LHA_SELINUX_PERM_ENTRYPOINT BIT(26)
 #define LHA_SELINUX_DIR_SEARCH   BIT(28)
 
 /*
@@ -78,26 +76,70 @@ static void lha_append_perm(char *buf, size_t buf_len, const char *perm)
 static void lha_decode_avc_perm(const char *tclass, u32 denied,
 				char *buf, size_t buf_len)
 {
+	u32 remaining = denied;
+
 	if (!buf || buf_len == 0)
 		return;
 
 	buf[0] = '\0';
-	if (denied & LHA_SELINUX_PERM_OPEN)
+	if (denied & LHA_SELINUX_PERM_OPEN) {
 		lha_append_perm(buf, buf_len, "open");
-	if (denied & LHA_SELINUX_PERM_READ)
-		lha_append_perm(buf, buf_len, "read");
-	if (denied & LHA_SELINUX_PERM_APPEND)
-		lha_append_perm(buf, buf_len, "append");
-	else if (denied & LHA_SELINUX_PERM_WRITE)
-		lha_append_perm(buf, buf_len, "write");
-	if (tclass && strcmp(tclass, "dir") == 0) {
-		if (denied & LHA_SELINUX_DIR_SEARCH)
-			lha_append_perm(buf, buf_len, "search");
-	} else if (denied & (LHA_SELINUX_PERM_EXECUTE |
-			     LHA_SELINUX_PERM_EXECUTE_NO_TRANS |
-			     LHA_SELINUX_PERM_ENTRYPOINT)) {
-		lha_append_perm(buf, buf_len, "exec");
+		remaining &= ~LHA_SELINUX_PERM_OPEN;
 	}
+	if (denied & LHA_SELINUX_PERM_READ) {
+		lha_append_perm(buf, buf_len, "read");
+		remaining &= ~LHA_SELINUX_PERM_READ;
+	}
+	if (denied & LHA_SELINUX_PERM_APPEND) {
+		lha_append_perm(buf, buf_len, "append");
+		remaining &= ~LHA_SELINUX_PERM_APPEND;
+	} else if (denied & LHA_SELINUX_PERM_WRITE) {
+		lha_append_perm(buf, buf_len, "write");
+		remaining &= ~LHA_SELINUX_PERM_WRITE;
+	}
+	if (tclass && strcmp(tclass, "dir") == 0) {
+		if (denied & LHA_SELINUX_DIR_SEARCH) {
+			lha_append_perm(buf, buf_len, "search");
+			remaining &= ~LHA_SELINUX_DIR_SEARCH;
+		}
+	} else if (denied & LHA_SELINUX_PERM_EXECUTE) {
+		lha_append_perm(buf, buf_len, "exec");
+		remaining &= ~LHA_SELINUX_PERM_EXECUTE;
+	}
+
+	if (remaining != 0)
+		lha_append_perm(buf, buf_len, "unknown");
+	if (buf[0] == '\0')
+		lha_append_perm(buf, buf_len, "unknown");
+}
+
+static bool lha_avc_perm_has_unknown(const char *perm)
+{
+	if (!perm)
+		return false;
+
+	return strcmp(perm, "unknown") == 0 ||
+	       strstr(perm, "|unknown") != NULL ||
+	       strstr(perm, "unknown|") != NULL;
+}
+
+static bool lha_avc_mask_has_only_unknown_perms(const char *perm)
+{
+	return perm && strcmp(perm, "unknown") == 0;
+}
+
+static void lha_log_unknown_perm_debug(u32 denied, const char *tclass,
+				       const char *perm)
+{
+	if (!lha_avc_capture_debug || !lha_avc_perm_has_unknown(perm))
+		return;
+
+	if (lha_avc_mask_has_only_unknown_perms(perm))
+		pr_info("lha_centos9_avc_capture: avc deny mask=0x%x tclass=%s decoded to perm=unknown; this permission is not modeled yet\n",
+			denied, tclass ? tclass : "");
+	else
+		pr_info("lha_centos9_avc_capture: avc deny mask=0x%x tclass=%s includes unmodeled permissions; decoded perm=%s\n",
+			denied, tclass ? tclass : "", perm);
 }
 
 static void lha_avc_trace_probe(void *data,
@@ -126,6 +168,7 @@ static void lha_avc_trace_probe(void *data,
 	lha_copy_string(event.tcontext, sizeof(event.tcontext), tcontext);
 	lha_copy_string(event.tclass, sizeof(event.tclass), tclass);
 	lha_decode_avc_perm(tclass, sad->denied, event.perm, sizeof(event.perm));
+	lha_log_unknown_perm_debug(sad->denied, tclass, event.perm);
 
 	if (lha_avc_capture_debug)
 		pr_info("lha_centos9_avc_capture: captured avc deny pid=%u tid=%u comm=%s permissive=%u denied_mask=0x%x tclass=%s perm=%s scontext=%s tcontext=%s\n",

@@ -209,6 +209,8 @@ lha_centos9_resolver: reject avc cache insert: ...
 
 这通常意味着 AVC 事件缺少当前 resolver 所需的关键匹配字段，最常见的是 `perm` 为空。
 
+当前实现里，如果 `avc_capture` 遇到还没有显式建模的 SELinux 权限位，会把它们统一输出成 `unknown`，而不是强行归一化到 `exec`、`read` 等已有语义。
+
 ### 8.4 重要提醒
 
 `sample_append` 不能用来验证 `avc_capture` 是否工作，因为 injector 会直接调用 `lha_centos9_record_avc_event()` 往 resolver 缓冲区写一条匹配事件，而不是依赖真实 `selinux_audited` tracepoint。
@@ -280,6 +282,13 @@ make clean
 - `scontext` 和 `tcontext` 是否为空
 
 如果这几个字段不完整，resolver 当前不会接受该事件。
+
+如果日志里的 `perm=unknown` 或 `perm=read|unknown`，说明：
+
+- `avc_capture` 已经抓到了真实 AVC deny
+- 但 deny 位里包含当前系统还没有单独建模的权限
+
+这类事件现在会被写入缓存，方便后续统一补全权限映射逻辑。
 
 ### 11.6 injector 的输出不代表真实 hook
 

@@ -110,6 +110,7 @@ probe 函数签名与当前目标 tracepoint 对齐，能接收到：
 - `append`
 - `exec`
 - `search`
+- `unknown`
 
 映射规则如下：
 
@@ -118,9 +119,22 @@ probe 函数签名与当前目标 tracepoint 对齐，能接收到：
 - 命中 `APPEND` 位 -> `append`
 - 未命中 `APPEND` 但命中 `WRITE` 位 -> `write`
 - `tclass == "dir"` 且命中目录搜索位 -> `search`
-- 非目录目标且命中 `execute`、`execute_no_trans` 或 `entrypoint` -> `exec`
+- 非目录目标且命中 `execute` -> `exec`
+- 其他当前还没有显式建模的 deny 位 -> `unknown`
 
 这套映射是为了和 resolver 生成的 `request.perm` 使用同一套命名，从而支持字符串级匹配。
+
+如果同一条 AVC deny 同时包含“已建模权限”和“未建模权限”，当前实现会输出类似：
+
+```text
+read|unknown
+```
+
+如果整条 deny 都只包含当前系统未建模的权限，则会输出：
+
+```text
+unknown
+```
 
 ## 8. 与 resolver 的配合方式
 
