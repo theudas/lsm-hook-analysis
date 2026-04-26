@@ -35,6 +35,11 @@ struct lha_selinux_audit_data {
 };
 
 static struct tracepoint *lha_avc_tracepoint;
+static bool lha_avc_capture_debug;
+
+module_param_named(debug_capture, lha_avc_capture_debug, bool, 0644);
+MODULE_PARM_DESC(debug_capture,
+		 "Log captured SELinux AVC deny events before they are forwarded to the resolver");
 
 static void lha_copy_string(char *dst, size_t dst_len, const char *src)
 {
@@ -98,6 +103,7 @@ static void lha_avc_trace_probe(void *data,
 				const char *tclass)
 {
 	struct lha_avc_event_v1 event;
+	int rc;
 
 	(void)data;
 
@@ -117,7 +123,20 @@ static void lha_avc_trace_probe(void *data,
 	lha_copy_string(event.tclass, sizeof(event.tclass), tclass);
 	lha_decode_avc_perm(tclass, sad->denied, event.perm, sizeof(event.perm));
 
-	lha_centos9_record_avc_event(&event);
+	if (lha_avc_capture_debug)
+		pr_info("lha_centos9_avc_capture: captured avc deny pid=%u tid=%u comm=%s permissive=%u tclass=%s perm=%s scontext=%s tcontext=%s\n",
+			event.pid, event.tid, event.comm, event.permissive,
+			event.tclass, event.perm, event.scontext, event.tcontext);
+
+	rc = lha_centos9_record_avc_event(&event);
+	if (lha_avc_capture_debug) {
+		if (rc == 0)
+			pr_info("lha_centos9_avc_capture: forwarded avc deny to resolver cache pid=%u tid=%u comm=%s perm=%s\n",
+				event.pid, event.tid, event.comm, event.perm);
+		else
+			pr_warn("lha_centos9_avc_capture: failed to forward avc deny to resolver cache: %d\n",
+				rc);
+	}
 }
 
 static void lha_find_tracepoint(struct tracepoint *tp, void *priv)

@@ -20,6 +20,11 @@
 static DEFINE_SPINLOCK(lha_avc_cache_lock);
 static struct lha_avc_event_v1 lha_avc_cache[LHA_AVC_CACHE_LEN];
 static size_t lha_avc_cache_next;
+static bool lha_avc_cache_debug;
+
+module_param_named(debug_avc_cache, lha_avc_cache_debug, bool, 0644);
+MODULE_PARM_DESC(debug_avc_cache,
+		 "Log resolver AVC cache inserts and rejects for debugging");
 
 static void lha_copy_string(char *dst, size_t dst_len, const char *src)
 {
@@ -611,15 +616,28 @@ int lha_centos9_record_avc_event(const struct lha_avc_event_v1 *event)
 	unsigned long flags;
 	size_t index;
 
-	if (!event)
+	if (!event) {
+		if (lha_avc_cache_debug)
+			pr_warn("lha_centos9_resolver: reject avc cache insert: null event\n");
 		return -EINVAL;
-	if (!lha_avc_event_has_match_keys(event))
+	}
+	if (!lha_avc_event_has_match_keys(event)) {
+		if (lha_avc_cache_debug)
+			pr_warn("lha_centos9_resolver: reject avc cache insert: denied=%u tclass=%s perm=%s scontext=%s tcontext=%s\n",
+				event->denied, event->tclass, event->perm,
+				event->scontext, event->tcontext);
 		return -EINVAL;
+	}
 
 	spin_lock_irqsave(&lha_avc_cache_lock, flags);
 	index = lha_avc_cache_next++ % ARRAY_SIZE(lha_avc_cache);
 	lha_avc_cache[index] = *event;
 	spin_unlock_irqrestore(&lha_avc_cache_lock, flags);
+
+	if (lha_avc_cache_debug)
+		pr_info("lha_centos9_resolver: cached avc deny index=%zu pid=%u tid=%u comm=%s permissive=%u tclass=%s perm=%s scontext=%s tcontext=%s\n",
+			index, event->pid, event->tid, event->comm, event->permissive,
+			event->tclass, event->perm, event->scontext, event->tcontext);
 
 	return 0;
 }
