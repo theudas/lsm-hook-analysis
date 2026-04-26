@@ -1,263 +1,155 @@
- # CentOS Stream 9 运行说明
+# CentOS Stream 9 运行说明
 
-## 1. 代码运行在什么地方
+本文档只描述当前仓库这套模块在 CentOS Stream 9 场景下的运行前提、依赖关系和现实边界。
 
-当前仓库只保留 `kmod/` 这条内核态运行路径。
+## 1. 当前保留的运行路径
 
-`kmod/` 内拆成三个模块：
+仓库当前只保留 `kmod/` 这一条内核态运行路径，包含 3 个模块：
 
 - `lha_centos9_resolver.ko`
-  生产可用的 resolver API 模块
+  核心解析模块
 - `lha_centos9_injector.ko`
-  仅用于 debugfs 假事件注入和自测的测试模块
+  debugfs 自测模块
 - `lha_centos9_avc_capture.ko`
-  可选 AVC 抓取模块，把 SELinux AVC deny 写入 resolver 内部缓存
+  AVC deny 抓取模块
 
-更准确地说：
+其中真正面向生产接入的是 resolver；另外两个模块分别用于自测和 deny 关联增强。
 
-1. 外部抓取方在 SELinux hook 现场拿到：
-   - hook 类型
-   - hook 参数
-   - hook 返回值
-   - 时间戳
-2. 抓取方把这些原始输入交给 resolver
-3. resolver 在 **内核工作线程 / workqueue / kthread** 里继续解析：
-   - hook 现场稳定保存下来的 `task`
-   - hook 现场稳定保存下来的 `cred`
-   - `inode` / `file`
-   - `scontext`
-   - `tcontext`
-   - 路径
-4. 解析后的事件再被格式化成 JSON，或者作为结构化数据继续往外送
+## 2. 为什么这套实现面向 CentOS Stream 9
 
-因此，这份代码的定位是：
+仓库附带了 `centos-stream-9/` 内核树，当前文档中的关键运行前提都能在这棵树里交叉核实。
 
-- 一个可加载的生产 resolver 模块
-- 一个可选的 AVC 抓取模块
-- 一个可选的自测 injector 模块
-- 或者一个和现有抓取模块链接在一起的内核侧库
+### 2.1 resolver 使用的安全接口
 
-## 2. 为什么建议在 workqueue 里运行
+resolver 依赖以下公开安全接口：
 
-`kmod/lha_centos9_resolver.c` 这版实现默认建议在 **可睡眠上下文** 中运行，而不是直接塞进原始 hook 回调里。
+- `security_cred_getsecid()`
+- `security_secid_to_secctx()`
+- `security_release_secctx()`
+- `security_inode_getsecctx()`
 
-原因是下面这些操作都可能睡眠或分配内存：
+这些接口在 `centos-stream-9/security/security.c` 中存在并导出，适合外部模块调用。
+
+### 2.2 AVC capture 使用的 tracepoint
+
+AVC capture 依赖：
+
+- `selinux_audited` tracepoint
+- `for_each_kernel_tracepoint()`
+
+仓库内核树中可以找到：
+
+- `centos-stream-9/include/trace/events/avc.h`
+  定义 `TRACE_EVENT(selinux_audited, ...)`
+- `centos-stream-9/security/selinux/avc.c`
+  调用 `trace_selinux_audited(...)`
+- `centos-stream-9/kernel/tracepoint.c`
+  导出 `for_each_kernel_tracepoint()`
+
+因此，当前 `lha_centos9_avc_capture.ko` 是按这套内核结构编写的。
+
+## 3. 推荐的运行模型
+
+当前实现建议采用“hook 现场抓取 + 异步解析”的模型。
+
+推荐流程：
+
+1. 外部抓取模块在 hook 现场采集参数和最终返回值。
+2. 在 hook 现场为 `task`、`cred`、`inode` 或 `file` 建立稳定引用。
+3. 把 `struct lha_capture_event_v1` 投递到 `workqueue` 或 `kthread`。
+4. 在可睡眠上下文中调用 `lha_centos9_resolve_event()`。
+
+这样做的原因是 resolver 当前会调用：
 
 - `security_secid_to_secctx()`
 - `security_inode_getsecctx()`
 - `d_path()`
 - `kmalloc(GFP_KERNEL)`
 
-所以推荐工作流不是：
+这些操作都不适合直接塞进不可睡眠上下文。
 
-- hook 里直接把所有字段都解析完
+## 4. 模块之间的关系
 
-而是：
+推荐加载顺序：
 
-1. hook 现场只抓最小必要输入
-2. 把输入放到队列中
-3. 用 workqueue 异步调用 `lha_centos9_resolve_event()`
+1. `lha_centos9_resolver.ko`
+2. `lha_centos9_avc_capture.ko`
+3. 你们自己的 hook 抓取模块
 
-这也是为什么文档里一直把 resolver 定义为“hook 之后运行”。
+如果只做自测，则使用：
 
-## 3. 为什么这版可以适配 CentOS Stream 9
+1. `lha_centos9_resolver.ko`
+2. `lha_centos9_injector.ko`
 
-这版 `kmod/` 代码尽量使用 **公开 LSM 接口**，避免强依赖 SELinux 私有内部符号：
+依赖关系如下：
 
-- 主体 secid:
-  `security_cred_getsecid(captured_cred, &secid)`
-- 主体 context:
-  `security_secid_to_secctx(secid, &secctx, &len)`
-- 目标 context:
-  `security_inode_getsecctx(inode, &ctx, &len)`
-- context 释放:
-  `security_release_secctx()`
+- injector 通过 resolver 导出的 API 做样例解析
+- AVC capture 通过 resolver 导出的 `lha_centos9_record_avc_event()` 写入 deny 缓存
 
-这些接口在 `centos-stream-9/security/security.c` 中是导出的，适合普通外部模块使用。
+## 5. 路径恢复的现实边界
 
-相对地，下面这些更偏 SELinux 内部实现的符号并没有被本版当作硬依赖：
+当前实现里，`path` 的恢复精度取决于输入对象类型。
 
-- `cred_sid()`
-- `security_sid_to_context(&selinux_state, ...)`
-- `selinux_inode()`
-- `selinux_state`
+### 5.1 `file *`
 
-这样做的目的是让 resolver 更容易作为外部模块部署到你的 CentOS Stream 9 服务器上。
+对 `file_open` 和 `file_permission`，resolver 通过 `d_path(&file->f_path, ...)` 恢复路径。
 
-## 4. 当前内核模块代码做了什么
+这种方式通常更接近用户空间看到的真实路径。
 
-### 4.1 `lha_centos9_resolver.ko`
+### 5.2 `inode *`
 
-`kmod/lha_centos9_resolver.c` 已经实现了：
+对 `inode_permission`，resolver 只有 `inode`，没有完整的 mount/path 上下文，只能尝试：
 
-- 3 个 hook 的路由
-- 从外部传入的稳定 `task` 读取 `pid/tid/comm`
-- 从外部传入的稳定 `cred` 读取主体 secid，再转成 `scontext`
-- 从 `inode` / `file` 读取：
-  - `dev`
-  - `ino`
-  - `type`
-  - `path`
-- 从 `security_inode_getsecctx()` 读取 `tcontext`
-- 从 `inode->i_mode` 解码：
-  - `obj_type`
-  - `type`
-  - `tclass`
-  - `perm`
-- 生成统一结构化结果
-- 自动匹配内部 AVC 缓存并更新 `policy_result`
-- 将结果格式化成 JSON
+- `d_find_alias(inode)`
+- `dentry_path_raw()`
 
-它对外导出：
+因此：
 
-- `lha_centos9_resolve_event()`
-- `lha_centos9_format_json()`
-- `lha_centos9_record_avc_event()`
+- 不保证得到全局绝对路径
+- 失败时会回退到 dentry 名称或 `<unknown>`
 
-### 4.2 `lha_centos9_avc_capture.ko`
+## 6. `policy_result` 的当前能力边界
 
-`kmod/lha_centos9_avc_capture.c` 负责采集 SELinux AVC 审计事件：
+当前实现的 `policy_result` 依赖 AVC deny 关联，而不是完整的 SELinux 决策采集。
 
-- 注册 `selinux_audited` tracepoint probe
-- 把 AVC deny 事件归一化成 `struct lha_avc_event_v1`
-- 调用 `lha_centos9_record_avc_event()` 写入 resolver 内部缓存
+因此主解析路径中实际会得到：
 
-### 4.3 `lha_centos9_injector.ko`
+- `deny`
+- `inferred_allow`
+- `unknown`
 
-`kmod/lha_centos9_injector.c` 不参与生产解析链路，它的职责是：
+当前不应把它理解为“完整重建了策略层 allow/deny 决策”。
 
-- 创建 debugfs 调试入口
-- 构造 3 组假事件
-- 通过导出的 resolver API 调用：
-  - `lha_centos9_resolve_event()`
-  - `lha_centos9_format_json()`
-- 保存最近一次生成的 JSON，方便自测验证
+## 7. 构建与运行前提
 
-## 5. 路径字段的现实边界
-
-`path` 字段分两种情况：
-
-- 对 `file *`
-  可以通过 `d_path(&file->f_path, ...)` 尽量恢复绝对路径
-- 对 `inode *`
-  因为只有 inode，没有 mount/path 上下文，无法保证拿到全局绝对路径
-  这时只能 best effort：
-  - 先尝试 `d_find_alias(inode)` + `dentry_path_raw()`
-  - 如果还是不行，至少退化成文件名或 `<unknown>`
-
-所以：
-
-- `file_open` / `file_permission` 通常更容易拿到绝对路径
-- `inode_permission` 只能尽力恢复
-
-## 6. 代码如何运行
-
-### 6.1 编译方式
-
-在服务器上，推荐使用运行中内核对应的构建目录：
+模块构建仍以目标机器的运行内核为准。最常见的方式是使用：
 
 ```bash
-cd /path/to/lsm-hook-analysis/kmod
-make -C /lib/modules/$(uname -r)/build M=$PWD modules
+/lib/modules/$(uname -r)/build
 ```
 
-如果你是基于本地这棵 `centos-stream-9` 源码树做开发，也可以：
+仓库中的 `centos-stream-9/` 更适合作为：
 
-```bash
-cd /Users/tanruoying/Desktop/codex_chat/lsm-hook-analysis/kmod
-make KDIR=/Users/tanruoying/Desktop/codex_chat/centos-stream-9
-```
+- 阅读实现依赖
+- 核实接口存在性
+- 做版本适配时查源码
 
-前提是对应内核树已经完成模块编译所需的准备工作。
+它本身不是对当前系统直接可用的“万能构建目录”替代品。
 
-### 6.2 加载方式
+## 8. 自测与生产的区别
 
-生产场景最小加载方式：
+`lha_centos9_injector.ko` 只能证明：
 
-```bash
-sudo insmod lha_centos9_resolver.ko
-```
+- resolver 模块能被调用
+- 样例对象能被解析
+- JSON 输出结构存在
+- AVC deny 关联通路能被触发
 
-如果你的抓取模块和 resolver 是分开的，那么典型加载顺序是：
+它不能证明：
 
-1. 先加载 `lha_centos9_resolver.ko`
-2. 如果需要真实 AVC 关联，再加载 `lha_centos9_avc_capture.ko`
-3. 再加载抓取 hook 参数/返回值的模块
-4. 抓取模块在收到原始事件后调用：
-   `lha_centos9_resolve_event()`
-
-如果你还需要做假事件注入自测，再额外加载：
-
-```bash
-sudo insmod lha_centos9_injector.ko
-```
-
-只有在加载 `lha_centos9_injector.ko` 之后，才会创建：
-
-```bash
-/sys/kernel/debug/lha_centos9/inject
-/sys/kernel/debug/lha_centos9/last_json
-```
-
-### 6.3 推荐调用方式
-
-最推荐的方式不是在 hook 原地调用，而是：
-
-1. hook 现场组装 `struct lha_capture_event_v1`
-   同时对 `task/cred/file/inode` 建立稳定引用
-2. 把它丢进工作队列
-3. worker 中调用：
-   `lha_centos9_resolve_event()`
-4. 再调用：
-   `lha_centos9_format_json()`
-5. 把 JSON 写到你自己的输出通道
-
-输出通道可以是：
-
-- debugfs
-- procfs
-- relayfs
-- netlink
-- character device
-- trace buffer
-
-### 6.4 假事件注入验证
-
-为了不依赖真实抓取模块，当前版本额外提供了一个独立的 injector 模块，可以直接在服务器上验证 resolver 是否能工作。
-
-先加载：
-
-```bash
-sudo insmod lha_centos9_resolver.ko
-sudo insmod lha_centos9_injector.ko
-```
-
-先确保 debugfs 已挂载：
-
-```bash
-sudo mount -t debugfs none /sys/kernel/debug
-```
-
-然后可以写入以下命令：
-
-```bash
-echo sample_inode | sudo tee /sys/kernel/debug/lha_centos9/inject
-echo sample_open | sudo tee /sys/kernel/debug/lha_centos9/inject
-echo sample_append | sudo tee /sys/kernel/debug/lha_centos9/inject
-```
-
-三条命令分别会构造：
-
-- `sample_inode`
-  - 目标路径：`/tmp`
-  - hook：`selinux_inode_permission`
-  - mask：`MAY_EXEC`
-- `sample_open`
-  - 目标路径：`/etc/hosts`
-  - hook：`selinux_file_open`
-- `sample_append`
-  - 目标路径：`/tmp/lha_inject.log`
-  - hook：`selinux_file_permission`
+- 真实 hook 抓取模块接入无误
+- 真实业务负载下的并发、时序和性能表现
+- 所有目标路径和 SELinux 场景都能稳定恢复
   - mask：`MAY_WRITE`
   - `ret` 会被伪造为 `-EACCES`，用于验证 `runtime_result=deny`
 

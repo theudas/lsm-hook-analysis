@@ -1,102 +1,98 @@
 # lsm-hook-analysis
 
-`lsm-hook-analysis` 是一个面向 SELinux LSM hook 事件的内核态资源访问解析项目。它不直接抓取 hook，而是接收外部抓取模块传入的 `task/cred/inode/file/mask/ret` 等内核对象和结果，在内核态解析出主体、目标资源、访问权限、SELinux 上下文、路径和运行结果，并输出统一结构化事件或 JSON。
+`lsm-hook-analysis` 是一个面向 SELinux LSM hook 事件的内核态解析项目。它不直接抓取 hook，而是接收外部模块传入的 `task/cred/inode/file/mask/ret` 等对象，在可睡眠内核上下文中补齐主体、目标资源、权限语义、SELinux 上下文和结果信息，再输出统一结构体或 JSON。
 
-当前仓库只保留 CentOS Stream 9 相关的内核态实现，用户态原型、测试和回放工具已移除。
+当前仓库只保留 CentOS Stream 9 相关的内核模块实现。
 
-## 当前能力
+## 当前支持范围
 
-当前支持 3 类 SELinux hook 事件：
+当前只支持以下 3 类 hook 输入：
 
 - `selinux_inode_permission(struct inode *inode, int mask)`
 - `selinux_file_open(struct file *file)`
 - `selinux_file_permission(struct file *file, int mask)`
 
-当前可以解析和输出：
+当前可输出的主要字段包括：
 
-- 主体信息：`pid`、`tid`、`comm`、`scontext`
-- 请求信息：`mask_raw`、`obj_type`、`perm`
-- 目标资源：`dev`、`ino`、`type`、`path`、`tclass`、`tcontext`
-- 结果信息：`ret`、`runtime_result`、`policy_result`
-- JSON 格式化结果
-- 内核态 AVC 关联结果：`deny`、`inferred_allow` 或 `unknown`
+- `subject`
+  `pid`、`tid`、`comm`、`scontext`
+- `request`
+  `mask_raw`、`obj_type`、`perm`
+- `target`
+  `dev`、`ino`、`type`、`path`、`tclass`、`tcontext`
+- `result`
+  `ret`、`runtime_result`、`policy_result`
 
-## 模块结构
+其中：
 
-- `kmod/lha_centos9_resolver.c`
-  生产可用的 CentOS Stream 9 内核态 resolver 模块。
-- `kmod/lha_centos9_injector.c`
-  仅用于 debugfs 假事件注入和自测的独立测试模块。
-- `kmod/lha_centos9_avc_capture.c`
-  独立 AVC 抓取模块，采集 SELinux AVC 审计事件并写入 resolver 内部缓存。
-- `kmod/lha_centos9_resolver.h`
-  外部抓取模块接入时使用的结构体和导出 API。
-- `docs/`
-  接口、运行和使用文档。
+- `runtime_result` 当前按 `ret == 0`、`ret == -EACCES`、其他错误三类输出为 `allow`、`deny`、`error`
+- `policy_result` 当前主路径依赖 resolver 内部 AVC deny 关联，实际输出为 `deny`、`inferred_allow` 或 `unknown`
 
-`kmod/` 会构建出三个内核模块：
+## 模块组成
+
+`kmod/` 当前会构建 3 个模块：
 
 - `lha_centos9_resolver.ko`
-  生产模块，导出 `lha_centos9_resolve_event()`、`lha_centos9_format_json()` 和 AVC 关联辅助 API。
+  核心解析模块，提供事件解析、JSON 格式化和 AVC 关联辅助接口
 - `lha_centos9_injector.ko`
-  自测模块，通过 resolver 导出的 API 构造假事件并输出最近一次 JSON。
+  debugfs 自测模块，用固定样例事件验证 resolver 行为
 - `lha_centos9_avc_capture.ko`
-  AVC 抓取模块，把采集到的 AVC deny 事件交给 resolver 缓存。
+  AVC deny 抓取模块，把 `selinux_audited` tracepoint 事件写入 resolver 缓存
+
+公共头文件是：
+
+- `kmod/lha_centos9_resolver.h`
 
 ## 快速开始
 
-内核模块编译和运行需要在 Linux/CentOS Stream 9 环境中进行：
+模块编译和加载需要在 Linux 环境中完成，并且应使用目标运行内核对应的模块构建目录。
 
 ```bash
 cd kmod
 make
 sudo insmod lha_centos9_resolver.ko
 sudo insmod lha_centos9_injector.ko
-```
-
-假事件注入自测：
-
-```bash
 sudo mount -t debugfs none /sys/kernel/debug
 echo sample_open | sudo tee /sys/kernel/debug/lha_centos9/inject
 cat /sys/kernel/debug/lha_centos9/last_json
 ```
 
-完整步骤请看：
+完整操作见 [docs/usage_guide.md](docs/usage_guide.md)。
 
-- `docs/usage_guide.md`
+## 生产接入方式
 
-## 对外接入方式
+生产链路中的典型调用顺序是：
 
-外部抓取模块需要：
-
-1. 在 hook 现场保存稳定引用，例如 `get_task_struct()`、`get_cred()`、`get_file()`、`igrab()`。
+1. 外部抓取模块在 hook 现场保存稳定引用，例如 `get_task_struct()`、`get_cred()`、`igrab()`、`get_file()`。
 2. 组装 `struct lha_capture_event_v1`。
-3. 在 workqueue/kthread 等可睡眠上下文中调用 `lha_centos9_resolve_event()`。
+3. 在 `workqueue` 或 `kthread` 中调用 `lha_centos9_resolve_event()`。
 4. 如需 JSON，再调用 `lha_centos9_format_json()`。
-5. 如需基于 AVC deny 判定 `policy_result`，加载 `lha_centos9_avc_capture.ko` 或由外部 AVC 模块调用 `lha_centos9_record_avc_event()`；主解析接口会自动匹配 resolver 内部缓存。
-6. 调用方自己释放此前保存的引用。
+5. 如需 AVC deny 关联，加载 `lha_centos9_avc_capture.ko`，或由外部模块调用 `lha_centos9_record_avc_event()`。
+6. 调用方负责释放之前建立的对象引用。
 
-详细 API 说明请看：
+接入细节见 [docs/resolver_api_access_guide.md](docs/resolver_api_access_guide.md)。
 
-- `docs/resolver_api_access_guide.md`
-
-## 重要边界
+## 关键边界
 
 - 本项目当前不负责注册或抓取真实 LSM hook。
-- 真实生产链路需要外部抓取模块把 hook 参数和返回值传给 resolver。
-- 真实生产链路可以加载 `lha_centos9_avc_capture.ko`，或由你们自己的 AVC 抓取模块调用 resolver 的 AVC 记录接口。
-- `file *` 路径恢复通常更接近用户空间看到的真实路径。
-- `inode *` 路径恢复是 best effort，不保证是全局绝对路径。
-- `lha_centos9_injector.ko` 只是自测模块，不建议作为生产入口。
+- resolver 设计为运行在可睡眠上下文中，不建议直接在原始 hook 回调中调用。
+- `file *` 路径恢复通常更完整；`inode *` 路径恢复是 best effort。
+- 当前内置 AVC 关联只能稳定表达 deny 证据及其缺失，不能给出强语义的策略 `allow`。
+- `lha_centos9_injector.ko` 仅用于自测，不是生产入口。
 
 ## 文档
 
-- `docs/usage_guide.md`
-  从克隆项目到编译、加载模块、假事件注入的完整操作说明。
-- `docs/resolver_api_access_guide.md`
-  外部模块如何调用 resolver API。
-- `docs/interface_contract.md`
-  v1 输入输出接口约束。
-- `docs/centos_stream9_runtime.md`
-  CentOS Stream 9 内核态运行说明。
+- [docs/usage_guide.md](docs/usage_guide.md)
+  编译、加载、卸载和 injector 自测步骤
+- [docs/resolver_api_access_guide.md](docs/resolver_api_access_guide.md)
+  外部模块接入 resolver 的 API 和调用方式
+- [docs/interface_contract.md](docs/interface_contract.md)
+  输入输出结构、字段语义和返回约束
+- [docs/centos_stream9_runtime.md](docs/centos_stream9_runtime.md)
+  CentOS Stream 9 运行前提和运行边界
+- [docs/modules/resolver_module.md](docs/modules/resolver_module.md)
+  resolver 模块详细说明
+- [docs/modules/injector_module.md](docs/modules/injector_module.md)
+  injector 模块详细说明
+- [docs/modules/avc_capture_module.md](docs/modules/avc_capture_module.md)
+  AVC capture 模块详细说明
