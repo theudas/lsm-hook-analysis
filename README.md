@@ -90,6 +90,8 @@ cat /sys/kernel/debug/lha_centos9/last_json
   输入输出结构、字段语义和返回约束
 - [docs/centos_stream9_runtime.md](docs/centos_stream9_runtime.md)
   CentOS Stream 9 运行前提和运行边界
+- [docs/resolver_output_architecture_design.md](docs/resolver_output_architecture_design.md)
+  resolver 输出分层、接口设计和生产级演进方案
 - [docs/modules/resolver_module.md](docs/modules/resolver_module.md)
   resolver 模块详细说明
 - [docs/modules/injector_module.md](docs/modules/injector_module.md)
