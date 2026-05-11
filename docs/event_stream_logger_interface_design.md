@@ -26,12 +26,12 @@
 
 ## 3. 总体链路
 
-推荐链路如下：
+当前代码已经落地成下面这条链路：
 
 ```text
 外部 hook 抓取模块
     -> lha_centos9_resolve_event(in, &out)
-    -> lha_centos9_submit_event(&out)
+    -> resolver 内部自动尝试 submit
     -> /dev/lha_centos9_event_stream
     -> lha-eventd
     -> /configured/log/dir/YYYY-MM-DD.log
@@ -46,6 +46,13 @@
 - `lha-eventd`
   只负责读取、校验、序列化、按天落盘、flush/fsync、错误重试
 
+需要特别说明：
+
+- `lha_centos9_submit_event()` 仍然存在，并且仍然是 `event_sink` 的底层提交接口
+- 但对普通生产调用方来说，当前实现已经把“自动送流”放进了 `lha_centos9_resolve_event()`
+- 因此外部 hook 抓取模块通常只需要调用 `lha_centos9_resolve_event()`
+- 如果某些内部流程只想解析、不想自动送流，则使用 `lha_centos9_resolve_event_no_submit()`
+
 ## 4. 内核态接口边界
 
 ### 4.1 保持不变的 resolver 接口
@@ -57,19 +64,37 @@ int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
 			      struct lha_enriched_event_v1 *out);
 ```
 
-这仍然是外部抓取模块获得统一结构化结果的唯一入口。
+当前实现中，这仍然是外部抓取模块获得统一结构化结果的主入口，而且它会在成功返回前自动尝试把结果送入 `event_sink`。
+
+另外还新增了一个“只解析、不自动送流”的变体：
+
+```c
+int lha_centos9_resolve_event_no_submit(const struct lha_capture_event_v1 *in,
+					struct lha_enriched_event_v1 *out);
+```
+
+它主要用于少数内部流程，例如：
+
+- 需要先解析一次中间结果，再补 AVC，再重新解析
+- 不希望第一次中间结果进入连续日志流
 
 ### 4.2 新增事件提交接口
 
-建议新增头文件：
+底层事件提交通道仍保留以下接口：
 
 - `kmod/lha_centos9_event_sink.h`
 
-建议导出接口：
+导出接口为：
 
 ```c
 int lha_centos9_submit_event(const struct lha_enriched_event_v1 *event);
 ```
+
+在当前代码里，它的定位是：
+
+- `resolver` 自动送流时，最终会走到这层
+- `event_sink` 作为独立模块，仍然通过它接收事件
+- 但普通外部调用方通常不需要自己显式调用它
 
 语义约束：
 
@@ -98,12 +123,13 @@ int lha_centos9_submit_event(const struct lha_enriched_event_v1 *event);
 
 ### 4.3 推荐调用顺序
 
-生产链路中的外部抓取模块推荐顺序如下：
+当前代码语义下，生产链路中的外部抓取模块推荐顺序如下：
 
 1. 在 hook 现场建立 `task/cred/inode/file` 的稳定引用
 2. 在 `workqueue` 或 `kthread` 中调用 `lha_centos9_resolve_event()`
-3. 解析成功后调用 `lha_centos9_submit_event()`
-4. 无论提交是否成功，都由调用方释放自己持有的稳定引用
+3. `lha_centos9_resolve_event()` 成功返回前，内部自动尝试把结果送入 `event_sink`
+4. 如需 JSON 调试输出，再调用 `lha_centos9_format_json()`
+5. 调用方释放自己持有的稳定引用
 
 最小调用示意：
 
@@ -112,8 +138,12 @@ struct lha_enriched_event_v1 out;
 int rc;
 
 rc = lha_centos9_resolve_event(&capture, &out);
-if (!rc)
-	rc = lha_centos9_submit_event(&out);
+```
+
+如果某个内部流程不想自动送流，则使用：
+
+```c
+rc = lha_centos9_resolve_event_no_submit(&capture, &out);
 ```
 
 ## 5. 连续事件输出通道选择
@@ -342,7 +372,7 @@ v1 约束如下：
 
 `seq` 的推荐语义如下：
 
-- 每次调用 `lha_centos9_submit_event()` 时先分配一个单调递增序号
+- 每次事件真正进入 `event_sink` 队列时先分配一个单调递增序号
 - 只有成功入队的事件才能被用户态读到
 - 用户态看到的 `seq` 必须严格递增
 - 若当前 `seq` 与上一条收到的 `seq` 之间存在 gap，则 gap 大小等于中间丢失事件数
@@ -555,9 +585,10 @@ injector
 
 1. 新增共享 UAPI 头文件，先冻结 `frame header + payload` 结构
 2. 实现 `lha_centos9_event_sink.ko` 和 `lha_centos9_submit_event()`
-3. 暴露 `/dev/lha_centos9_event_stream` 与基础 sysfs 统计
-4. 实现 `lha-eventd` 的阻塞读、NDJSON 序列化与按天落盘
-5. 最后再补充 systemd service、日志权限、重试和观测项
+3. 在 `resolver` 中补上自动送流注册/调用逻辑，并保留 `lha_centos9_resolve_event_no_submit()`
+4. 暴露 `/dev/lha_centos9_event_stream` 与基础 sysfs 统计
+5. 实现 `lha-eventd` 的阻塞读、NDJSON 序列化与按天落盘
+6. 最后再补充 systemd service、日志权限、重试和观测项
 
 这样推进的好处是：
 
@@ -575,7 +606,10 @@ injector
 
 对当前仓库而言，v1 最合适的接口收敛方式是：
 
-- 内核导出 `lha_centos9_submit_event()`
+- 外部调用方主要走 `lha_centos9_resolve_event()`
+- `lha_centos9_resolve_event()` 成功返回前自动尝试送流
+- 内部少数场景使用 `lha_centos9_resolve_event_no_submit()`
+- 底层继续保留 `lha_centos9_submit_event()`
 - 用 `miscdevice + ring buffer + read/poll` 做连续输出通道
 - 用 `lha-eventd` 把 `lha_event_payload_v1` 写成与当前 JSON 语义兼容的日切 NDJSON 日志
 

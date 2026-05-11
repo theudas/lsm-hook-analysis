@@ -2,6 +2,12 @@
 
 本文档面向外部抓取模块作者，说明当前仓库中真实可用的 resolver 接口、推荐调用顺序和 AVC 关联方式。
 
+注意：当前代码语义已经更新为：
+
+- `lha_centos9_resolve_event()` 在成功返回前，会自动尝试把解析结果送入已注册的 `event_sink`
+- 如果 `lha_centos9_event_sink.ko` 未加载，解析本身仍然成功，只是不会进入连续事件流
+- 少数内部场景如果只想解析、不想自动送流，可使用 `lha_centos9_resolve_event_no_submit()`
+
 ## 1. 适用范围
 
 当前 API 只覆盖以下 3 类 SELinux hook 事件：
@@ -27,6 +33,7 @@ resolver 的职责是：
 当前导出的 GPL 符号有：
 
 - `lha_centos9_resolve_event()`
+- `lha_centos9_resolve_event_no_submit()`
 - `lha_centos9_format_json()`
 - `lha_centos9_record_avc_event()`
 - `lha_centos9_policy_result_kind_to_string()`
@@ -39,6 +46,13 @@ resolver 的职责是：
 - `lha_centos9_format_json()`
 - 可选的 `lha_centos9_record_avc_event()`
 
+如果要理解连续事件输出链路，还需要知道：
+
+- `kmod/lha_centos9_event_sink.h`
+- `lha_centos9_submit_event()`
+
+但在当前代码语义下，普通生产调用方通常不需要自己显式调用 `lha_centos9_submit_event()`。
+
 ## 3. 推荐接入顺序
 
 不建议在原始 hook 回调里直接调用 resolver。当前实现会调用可能睡眠的接口，因此建议在可睡眠上下文中处理。
@@ -50,8 +64,14 @@ resolver 的职责是：
 3. 组装 `struct lha_capture_event_v1`。
 4. 把事件放到 `workqueue` 或 `kthread`。
 5. 在 worker 中调用 `lha_centos9_resolve_event()`。
-6. 如需 JSON，再调用 `lha_centos9_format_json()`。
-7. 调用方释放之前建立的引用。
+6. `lha_centos9_resolve_event()` 成功返回前，会自动尝试把结果送到 `event_sink`。
+7. 如需 JSON，再调用 `lha_centos9_format_json()`。
+8. 调用方释放之前建立的引用。
+
+这意味着：
+
+- 如果已经加载 `lha_centos9_event_sink.ko`，并且用户态 `lha-eventd` 正在读 `/dev/lha_centos9_event_stream`，那么第 5 步成功后，事件通常会继续出现在日志文件里
+- 如果 `event_sink` 没加载，`lha_centos9_resolve_event()` 仍然可以作为纯解析接口使用
 
 ## 4. 稳定引用要求
 
@@ -179,11 +199,11 @@ static void my_worker(struct work_struct *work)
 	kfree(pending);
 }
 
-static int submit_event(struct task_struct *task,
-			const struct cred *cred,
-			struct file *file,
-			int mask,
-			int ret)
+static int queue_capture_event(struct task_struct *task,
+			       const struct cred *cred,
+			       struct file *file,
+			       int mask,
+			       int ret)
 {
 	struct my_pending_event *pending;
 
@@ -206,6 +226,17 @@ static int submit_event(struct task_struct *task,
 	schedule_work(&pending->work);
 	return 0;
 }
+```
+
+在当前代码语义下，这段示例已经具备两种效果：
+
+- `out` 中拿到完整结构化结果
+- 如果 `event_sink` 已加载，会自动把同一条结果送入连续事件流
+
+如果某个内部流程只想解析、不想自动送流，可以改调：
+
+```c
+rc = lha_centos9_resolve_event_no_submit(&pending->ev, &out);
 ```
 
 ## 7. AVC deny 的两种接入方式
@@ -260,6 +291,7 @@ resolver 当前使用固定长度缓存和时间窗口进行 deny 匹配：
 ## 9. 返回值与缓冲区注意事项
 
 - `lha_centos9_resolve_event()` 成功返回 `0`，失败返回负错误码
+- 当前实现里，自动送流失败不会改变 `lha_centos9_resolve_event()` 的成功返回值
 - `lha_centos9_format_json()` 对空参数会返回 `-EINVAL`
 - 当前 `lha_centos9_format_json()` 不会把输出截断单独当作错误返回，调用方需要主动给足缓冲区
 
