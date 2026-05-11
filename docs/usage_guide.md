@@ -3,9 +3,10 @@
 本文档只描述当前仓库里真实存在的内核态用法：
 
 - 编译 `kmod/`
-- 加载和卸载 3 个模块
+- 加载和卸载 4 个模块
 - 用 injector 做本地自测
 - 了解生产接入时的最小调用顺序
+- 构建并运行用户态 `lha-eventd`
 
 ## 1. 前置条件
 
@@ -44,6 +45,7 @@ make KDIR=/path/to/kernel/build
 - `lha_centos9_resolver.ko`
 - `lha_centos9_injector.ko`
 - `lha_centos9_avc_capture.ko`
+- `lha_centos9_event_sink.ko`
 
 ## 3. 加载模块
 
@@ -63,6 +65,12 @@ sudo insmod lha_centos9_injector.ko
 
 ```bash
 sudo insmod lha_centos9_avc_capture.ko
+```
+
+如果需要连续事件输出通道，再加载 event sink：
+
+```bash
+sudo insmod lha_centos9_event_sink.ko
 ```
 
 推荐检查：
@@ -153,8 +161,9 @@ cat /sys/kernel/debug/lha_centos9/last_json
 2. 在 hook 现场为 `task`、`cred`、`inode` 或 `file` 建立稳定引用。
 3. 组装 `struct lha_capture_event_v1`。
 4. 在 `workqueue` 或 `kthread` 中调用 `lha_centos9_resolve_event()`。
-5. 如需字符串输出，再调用 `lha_centos9_format_json()`。
-6. 由调用方释放之前建立的引用。
+5. 如果走生产链路，调用 `lha_centos9_submit_event()`。
+6. 如需字符串输出，再调用 `lha_centos9_format_json()`。
+7. 由调用方释放之前建立的引用。
 
 如果要启用 deny 关联，有两种方式：
 
@@ -162,6 +171,67 @@ cat /sys/kernel/debug/lha_centos9/last_json
 - 由你们自己的 AVC 模块调用 `lha_centos9_record_avc_event()`
 
 详细 API 见 [resolver_api_access_guide.md](resolver_api_access_guide.md)。
+
+## 8. 连续事件输出链路
+
+如果要启用连续事件输出链路，推荐加载顺序如下：
+
+1. `lha_centos9_resolver.ko`
+2. `lha_centos9_event_sink.ko`
+3. 可选：`lha_centos9_avc_capture.ko`
+4. 你们自己的 hook 抓取模块
+5. 用户态 `lha-eventd`
+
+event sink 会创建：
+
+- 设备节点 `/dev/lha_centos9_event_stream`
+- sysfs 统计目录 `/sys/class/misc/lha_centos9_event_stream/`
+
+常用统计项包括：
+
+- `queue_capacity`
+- `queue_depth`
+- `submitted_total`
+- `dropped_total`
+- `reader_attached`
+
+## 9. 构建并运行 `lha-eventd`
+
+进入 `userspace/` 目录后执行：
+
+```bash
+cd /path/to/lsm-hook-analysis/userspace
+make
+```
+
+最小运行方式：
+
+```bash
+./lha-eventd output_dir=/tmp/lha-logs
+```
+
+默认行为：
+
+- 读取 `/dev/lha_centos9_event_stream`
+- 输出目录默认是 `/var/log/lha`
+- 按事件 `timestamp_ns` 落到 `YYYY-MM-DD.log`
+- 文件内容为 NDJSON
+
+如需使用配置文件：
+
+```bash
+./lha-eventd --config /etc/lha-eventd.conf
+```
+
+支持的配置项：
+
+- `device_path`
+- `output_dir`
+- `flush_interval_ms`
+- `fsync_interval_ms`
+- `max_batch_records`
+- `dir_mode`
+- `file_mode`
 
 ## 8. 开启 AVC 调试日志
 
@@ -217,7 +287,7 @@ lha_centos9_resolver: reject avc cache insert: ...
 
 要验证 `avc_capture`，必须先在系统里触发一条真实 AVC deny，再看上面的调试日志。
 
-## 9. 卸载模块
+## 10. 卸载模块
 
 卸载时应先卸载依赖 resolver 的模块：
 

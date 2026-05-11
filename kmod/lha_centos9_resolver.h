@@ -1,20 +1,12 @@
 #ifndef LHA_CENTOS9_RESOLVER_H
 #define LHA_CENTOS9_RESOLVER_H
 
+#include "../include/uapi/lha_event_stream.h"
+
 #include <linux/cred.h>
 #include <linux/fs.h>
 #include <linux/sched.h>
 #include <linux/types.h>
-
-#define LHA_MAX_COMM_LEN 16
-#define LHA_MAX_CONTEXT_LEN 256
-#define LHA_MAX_DEV_LEN 32
-#define LHA_MAX_TYPE_LEN 16
-#define LHA_MAX_PATH_LEN 512
-#define LHA_MAX_PERM_LEN 64
-#define LHA_MAX_HOOK_LEN 64
-#define LHA_MAX_SIG_LEN 128
-#define LHA_MAX_RESULT_LEN 16
 
 #define LHA_MAY_EXEC   0x00000001
 #define LHA_MAY_WRITE  0x00000002

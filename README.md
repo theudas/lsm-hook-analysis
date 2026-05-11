@@ -2,7 +2,7 @@
 
 `lsm-hook-analysis` 是一个面向 SELinux LSM hook 事件的内核态解析项目。它不直接抓取 hook，而是接收外部模块传入的 `task/cred/inode/file/mask/ret` 等对象，在可睡眠内核上下文中补齐主体、目标资源、权限语义、SELinux 上下文和结果信息，再输出统一结构体或 JSON。
 
-当前仓库只保留 CentOS Stream 9 相关的内核模块实现。
+当前仓库保留 CentOS Stream 9 相关的内核模块实现，并新增了一条生产侧连续事件输出链路。
 
 ## 当前支持范围
 
@@ -30,7 +30,7 @@
 
 ## 模块组成
 
-`kmod/` 当前会构建 3 个模块：
+`kmod/` 当前会构建 4 个模块：
 
 - `lha_centos9_resolver.ko`
   核心解析模块，提供事件解析、JSON 格式化和 AVC 关联辅助接口
@@ -38,10 +38,14 @@
   debugfs 自测模块，用固定样例事件验证 resolver 行为
 - `lha_centos9_avc_capture.ko`
   AVC deny 抓取模块，把 `selinux_audited` tracepoint 事件写入 resolver 缓存
+- `lha_centos9_event_sink.ko`
+  连续事件输出模块，把 `lha_enriched_event_v1` 送到 `/dev/lha_centos9_event_stream`
 
 公共头文件是：
 
 - `kmod/lha_centos9_resolver.h`
+- `kmod/lha_centos9_event_sink.h`
+- `include/uapi/lha_event_stream.h`
 
 ## 快速开始
 
@@ -66,9 +70,20 @@ cat /sys/kernel/debug/lha_centos9/last_json
 1. 外部抓取模块在 hook 现场保存稳定引用，例如 `get_task_struct()`、`get_cred()`、`igrab()`、`get_file()`。
 2. 组装 `struct lha_capture_event_v1`。
 3. 在 `workqueue` 或 `kthread` 中调用 `lha_centos9_resolve_event()`。
-4. 如需 JSON，再调用 `lha_centos9_format_json()`。
-5. 如需 AVC deny 关联，加载 `lha_centos9_avc_capture.ko`，或由外部模块调用 `lha_centos9_record_avc_event()`。
-6. 调用方负责释放之前建立的对象引用。
+4. 如果走生产事件流，调用 `lha_centos9_submit_event()`。
+5. 如需 JSON 调试输出，再调用 `lha_centos9_format_json()`。
+6. 如需 AVC deny 关联，加载 `lha_centos9_avc_capture.ko`，或由外部模块调用 `lha_centos9_record_avc_event()`。
+7. 调用方负责释放之前建立的对象引用。
+
+用户态 logger 可在 `userspace/` 目录构建：
+
+```bash
+cd userspace
+make
+./lha-eventd output_dir=/tmp/lha-logs
+```
+
+默认会读取 `/dev/lha_centos9_event_stream`，并按 `YYYY-MM-DD.log` 输出 NDJSON。
 
 接入细节见 [docs/resolver_api_access_guide.md](docs/resolver_api_access_guide.md)。
 
