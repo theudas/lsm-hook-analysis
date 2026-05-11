@@ -47,6 +47,8 @@ struct lha_eventd_log_state {
 
 static void lha_copy_string(char *dst, size_t dst_len, const char *src)
 {
+	size_t copy_len;
+
 	if (dst_len == 0)
 		return;
 
@@ -55,8 +57,9 @@ static void lha_copy_string(char *dst, size_t dst_len, const char *src)
 		return;
 	}
 
-	strncpy(dst, src, dst_len - 1);
-	dst[dst_len - 1] = '\0';
+	copy_len = strnlen(src, dst_len - 1);
+	memcpy(dst, src, copy_len);
+	dst[copy_len] = '\0';
 }
 
 static void lha_set_default_config(struct lha_eventd_config *cfg)
