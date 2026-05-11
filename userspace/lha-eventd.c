@@ -578,6 +578,21 @@ static int lha_process_frames(const struct lha_event_frame_v1 *frames,
 		}
 	}
 
+	/*
+	 * Make newly written batches visible to readers immediately.
+	 * Timed fsync is still handled separately by lha_maybe_flush().
+	 */
+	if (state->fp) {
+		if (fflush(state->fp) != 0) {
+			perror("fflush");
+			return -1;
+		}
+		if (clock_gettime(CLOCK_REALTIME, &state->last_flush) != 0) {
+			perror("clock_gettime");
+			return -1;
+		}
+	}
+
 	return lha_maybe_flush(state, cfg);
 }
 
