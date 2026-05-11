@@ -1,4 +1,5 @@
 #include "lha_centos9_resolver.h"
+#include "lha_centos9_event_sink.h"
 
 #include <linux/cred.h>
 #include <linux/dcache.h>
@@ -18,9 +19,11 @@
 #define LHA_AVC_CACHE_LEN 128
 
 static DEFINE_SPINLOCK(lha_avc_cache_lock);
+static DEFINE_MUTEX(lha_event_sink_lock);
 static struct lha_avc_event_v1 lha_avc_cache[LHA_AVC_CACHE_LEN];
 static size_t lha_avc_cache_next;
 static bool lha_avc_cache_debug;
+static const struct lha_event_sink_ops *lha_event_sink_ops;
 
 module_param_named(debug_avc_cache, lha_avc_cache_debug, bool, 0644);
 MODULE_PARM_DESC(debug_avc_cache,
@@ -629,6 +632,37 @@ int lha_centos9_record_avc_event(const struct lha_avc_event_v1 *event)
 }
 EXPORT_SYMBOL_GPL(lha_centos9_record_avc_event);
 
+int lha_centos9_register_event_sink(const struct lha_event_sink_ops *ops)
+{
+	if (!ops || !ops->owner || !ops->submit)
+		return -EINVAL;
+
+	mutex_lock(&lha_event_sink_lock);
+	if (lha_event_sink_ops) {
+		mutex_unlock(&lha_event_sink_lock);
+		return -EBUSY;
+	}
+
+	lha_event_sink_ops = ops;
+	mutex_unlock(&lha_event_sink_lock);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(lha_centos9_register_event_sink);
+
+int lha_centos9_unregister_event_sink(const struct lha_event_sink_ops *ops)
+{
+	mutex_lock(&lha_event_sink_lock);
+	if (lha_event_sink_ops != ops) {
+		mutex_unlock(&lha_event_sink_lock);
+		return -EINVAL;
+	}
+
+	lha_event_sink_ops = NULL;
+	mutex_unlock(&lha_event_sink_lock);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(lha_centos9_unregister_event_sink);
+
 static int lha_apply_cached_avc_policy_result(struct lha_enriched_event_v1 *event)
 {
 	struct lha_avc_match_options options = {
@@ -728,8 +762,30 @@ static int lha_resolve_file_permission(const struct lha_capture_event_v1 *in,
 	return 0;
 }
 
-int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
-			      struct lha_enriched_event_v1 *out)
+static void lha_maybe_submit_event(const struct lha_enriched_event_v1 *event)
+{
+	const struct lha_event_sink_ops *ops;
+	int rc;
+
+	mutex_lock(&lha_event_sink_lock);
+	ops = lha_event_sink_ops;
+	if (!ops || !try_module_get(ops->owner)) {
+		mutex_unlock(&lha_event_sink_lock);
+		return;
+	}
+	mutex_unlock(&lha_event_sink_lock);
+
+	rc = ops->submit(event);
+	module_put(ops->owner);
+
+	if (rc && rc != -ENODEV)
+		pr_warn_ratelimited("lha_centos9_resolver: auto submit failed: %d\n",
+				    rc);
+}
+
+static int lha_centos9_resolve_event_common(const struct lha_capture_event_v1 *in,
+					    struct lha_enriched_event_v1 *out,
+					    bool auto_submit)
 {
 	int rc;
 
@@ -760,9 +816,29 @@ int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
 	if (rc)
 		return rc;
 
-	return lha_apply_cached_avc_policy_result(out);
+	rc = lha_apply_cached_avc_policy_result(out);
+	if (rc)
+		return rc;
+
+	if (auto_submit)
+		lha_maybe_submit_event(out);
+
+	return 0;
+}
+
+int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
+			      struct lha_enriched_event_v1 *out)
+{
+	return lha_centos9_resolve_event_common(in, out, true);
 }
 EXPORT_SYMBOL_GPL(lha_centos9_resolve_event);
+
+int lha_centos9_resolve_event_no_submit(const struct lha_capture_event_v1 *in,
+					struct lha_enriched_event_v1 *out)
+{
+	return lha_centos9_resolve_event_common(in, out, false);
+}
+EXPORT_SYMBOL_GPL(lha_centos9_resolve_event_no_submit);
 
 static int lha_appendf(char *buf, size_t buf_len, size_t *off,
 		       const char *fmt, ...)

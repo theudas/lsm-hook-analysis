@@ -118,7 +118,7 @@ static int lha_run_injected_event(struct lha_capture_event_v1 *event,
 	}
 
 	if (inject_matching_avc_deny) {
-		rc = lha_centos9_resolve_event(event, out);
+		rc = lha_centos9_resolve_event_no_submit(event, out);
 		if (rc)
 			goto out_free;
 

@@ -161,7 +161,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 2. 在 hook 现场为 `task`、`cred`、`inode` 或 `file` 建立稳定引用。
 3. 组装 `struct lha_capture_event_v1`。
 4. 在 `workqueue` 或 `kthread` 中调用 `lha_centos9_resolve_event()`。
-5. 如果走生产链路，调用 `lha_centos9_submit_event()`。
+5. 当前实现会在 `lha_centos9_resolve_event()` 成功返回前自动尝试把事件送入 `event_sink`。
 6. 如需字符串输出，再调用 `lha_centos9_format_json()`。
 7. 由调用方释放之前建立的引用。
 

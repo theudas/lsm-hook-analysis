@@ -125,6 +125,9 @@ struct lha_enriched_event_v1 {
 int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
 			      struct lha_enriched_event_v1 *out);
 
+int lha_centos9_resolve_event_no_submit(const struct lha_capture_event_v1 *in,
+					struct lha_enriched_event_v1 *out);
+
 int lha_centos9_format_json(const struct lha_enriched_event_v1 *event,
 			    char *buf,
 			    size_t buf_len);

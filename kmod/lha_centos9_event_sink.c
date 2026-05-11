@@ -51,6 +51,11 @@ static struct lha_event_sink_state lha_event_sink = {
 	},
 };
 
+static const struct lha_event_sink_ops lha_event_sink_ops = {
+	.owner = THIS_MODULE,
+	.submit = lha_centos9_submit_event,
+};
+
 static void lha_check_payload_layout(void)
 {
 	BUILD_BUG_ON(sizeof(struct lha_subject_v1) !=
@@ -446,6 +451,15 @@ static int __init lha_centos9_event_sink_init(void)
 		return rc;
 	}
 
+	rc = lha_centos9_register_event_sink(&lha_event_sink_ops);
+	if (rc) {
+		lha_event_stream_remove_attrs(sink->miscdev.this_device);
+		misc_deregister(&sink->miscdev);
+		kfree(sink->queue);
+		sink->queue = NULL;
+		return rc;
+	}
+
 	sink->ready = true;
 	pr_info("lha_centos9_event_sink loaded with queue_capacity=%u\n",
 		sink->queue_capacity);
@@ -460,6 +474,7 @@ static void __exit lha_centos9_event_sink_exit(void)
 	sink->ready = false;
 	wake_up_interruptible(&sink->readq);
 
+	lha_centos9_unregister_event_sink(&lha_event_sink_ops);
 	if (sink->miscdev.this_device)
 		lha_event_stream_remove_attrs(sink->miscdev.this_device);
 	misc_deregister(&sink->miscdev);

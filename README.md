@@ -70,7 +70,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 1. 外部抓取模块在 hook 现场保存稳定引用，例如 `get_task_struct()`、`get_cred()`、`igrab()`、`get_file()`。
 2. 组装 `struct lha_capture_event_v1`。
 3. 在 `workqueue` 或 `kthread` 中调用 `lha_centos9_resolve_event()`。
-4. 如果走生产事件流，调用 `lha_centos9_submit_event()`。
+4. 当前实现会在 `lha_centos9_resolve_event()` 成功返回前自动尝试把事件送入 `event_sink`。
 5. 如需 JSON 调试输出，再调用 `lha_centos9_format_json()`。
 6. 如需 AVC deny 关联，加载 `lha_centos9_avc_capture.ko`，或由外部模块调用 `lha_centos9_record_avc_event()`。
 7. 调用方负责释放之前建立的对象引用。
