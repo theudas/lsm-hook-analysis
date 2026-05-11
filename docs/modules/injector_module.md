@@ -11,7 +11,7 @@
 - 调用 resolver 导出 API 完成解析和 JSON 格式化
 - 保存最近一次生成的 JSON，便于人工检查
 
-在当前代码里，如果同时加载了 `lha_centos9_event_sink.ko`，并且用户态 `lha-eventd` 正在读取 `/dev/lha_centos9_event_stream`，injector 触发的样例事件也会自动进入用户态日志文件。
+在当前代码里，如果同时加载了 `lha_centos9_event_channel.ko`，并且用户态 `lha-eventd` 正在读取 `/dev/lha_centos9_event_stream`，injector 触发的样例事件也会自动进入用户态日志文件。
 
 它依赖 `lha_centos9_resolver.ko`，模块里也通过 `MODULE_SOFTDEP("pre: lha_centos9_resolver")` 声明了这一点。
 
@@ -140,7 +140,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 cd kmod
 make
 sudo insmod lha_centos9_resolver.ko
-sudo insmod lha_centos9_event_sink.ko
+sudo insmod lha_centos9_event_channel.ko
 sudo insmod lha_centos9_injector.ko
 sudo mount -t debugfs none /sys/kernel/debug
 

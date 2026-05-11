@@ -340,7 +340,7 @@ injector
   负责解析
 - `avc_capture`
   负责 deny 线索补充
-- `event_sink`
+- `event_channel`
   负责连续事件输出通道
 
 ### 用户态

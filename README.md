@@ -38,13 +38,13 @@
   debugfs 自测模块，用固定样例事件验证 resolver 行为
 - `lha_centos9_avc_capture.ko`
   AVC deny 抓取模块，把 `selinux_audited` tracepoint 事件写入 resolver 缓存
-- `lha_centos9_event_sink.ko`
+- `lha_centos9_event_channel.ko`
   连续事件输出模块，把 `lha_enriched_event_v1` 送到 `/dev/lha_centos9_event_stream`
 
 公共头文件是：
 
 - `kmod/lha_centos9_resolver.h`
-- `kmod/lha_centos9_event_sink.h`
+- `kmod/lha_centos9_event_channel.h`
 - `include/uapi/lha_event_stream.h`
 
 ## 快速开始
@@ -69,7 +69,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 cd kmod
 make
 sudo insmod lha_centos9_resolver.ko
-sudo insmod lha_centos9_event_sink.ko
+sudo insmod lha_centos9_event_channel.ko
 sudo insmod lha_centos9_injector.ko
 sudo mount -t debugfs none /sys/kernel/debug
 
@@ -98,7 +98,7 @@ cat /tmp/lha-logs/$(date +%F).log
 1. 外部抓取模块在 hook 现场保存稳定引用，例如 `get_task_struct()`、`get_cred()`、`igrab()`、`get_file()`。
 2. 组装 `struct lha_capture_event_v1`。
 3. 在 `workqueue` 或 `kthread` 中调用 `lha_centos9_resolve_event()`。
-4. 当前实现会在 `lha_centos9_resolve_event()` 成功返回前自动尝试把事件送入 `event_sink`。
+4. 当前实现会在 `lha_centos9_resolve_event()` 成功返回前自动尝试把事件送入 `event_channel`。
 5. 如需 JSON 调试输出，再调用 `lha_centos9_format_json()`。
 6. 如需 AVC deny 关联，加载 `lha_centos9_avc_capture.ko`，或由外部模块调用 `lha_centos9_record_avc_event()`。
 7. 调用方负责释放之前建立的对象引用。

@@ -45,7 +45,7 @@ make KDIR=/path/to/kernel/build
 - `lha_centos9_resolver.ko`
 - `lha_centos9_injector.ko`
 - `lha_centos9_avc_capture.ko`
-- `lha_centos9_event_sink.ko`
+- `lha_centos9_event_channel.ko`
 
 ## 3. 加载模块
 
@@ -67,10 +67,10 @@ sudo insmod lha_centos9_injector.ko
 sudo insmod lha_centos9_avc_capture.ko
 ```
 
-如果需要连续事件输出通道，再加载 event sink：
+如果需要连续事件输出通道，再加载 event channel：
 
 ```bash
-sudo insmod lha_centos9_event_sink.ko
+sudo insmod lha_centos9_event_channel.ko
 ```
 
 推荐检查：
@@ -155,12 +155,12 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 ## 7. 通过日志查看 injector 注入事件
 
-当前代码里，`lha_centos9_resolve_event()` 在成功返回前会自动尝试把解析结果送入 `event_sink`。
+当前代码里，`lha_centos9_resolve_event()` 在成功返回前会自动尝试把解析结果送入 `event_channel`。
 
 因此，只要同时满足下面几个条件，就可以在用户态日志文件里看到 injector 注入的事件：
 
 - 已加载 `lha_centos9_resolver.ko`
-- 已加载 `lha_centos9_event_sink.ko`
+- 已加载 `lha_centos9_event_channel.ko`
 - 已加载 `lha_centos9_injector.ko`
 - 已挂载 debugfs
 - 用户态 `lha-eventd` 正在运行，并成功打开 `/dev/lha_centos9_event_stream`
@@ -173,12 +173,12 @@ cat /sys/kernel/debug/lha_centos9/last_json
 cd /path/to/lsm-hook-analysis/kmod
 make
 sudo insmod lha_centos9_resolver.ko
-sudo insmod lha_centos9_event_sink.ko
+sudo insmod lha_centos9_event_channel.ko
 sudo insmod lha_centos9_injector.ko
 sudo mount -t debugfs none /sys/kernel/debug
 ```
 
-确认 event sink 设备节点已经存在：
+确认 event channel 设备节点已经存在：
 
 ```bash
 ls -l /dev/lha_centos9_event_stream
@@ -254,7 +254,7 @@ cat /sys/class/misc/lha_centos9_event_stream/dropped_total
 - `reader_attached = 1`
   说明 `lha-eventd` 已成功打开设备节点
 - `submitted_total` 增长
-  说明 resolver 已把事件送进 event sink
+  说明 resolver 已把事件送进 event channel
 - `dropped_total = 0`
   说明当前没有因为队列满而丢包
 
@@ -275,7 +275,7 @@ sudo ./lha-eventd output_dir=/tmp/lha-logs
 2. 在 hook 现场为 `task`、`cred`、`inode` 或 `file` 建立稳定引用。
 3. 组装 `struct lha_capture_event_v1`。
 4. 在 `workqueue` 或 `kthread` 中调用 `lha_centos9_resolve_event()`。
-5. 当前实现会在 `lha_centos9_resolve_event()` 成功返回前自动尝试把事件送入 `event_sink`。
+5. 当前实现会在 `lha_centos9_resolve_event()` 成功返回前自动尝试把事件送入 `event_channel`。
 6. 如需字符串输出，再调用 `lha_centos9_format_json()`。
 7. 由调用方释放之前建立的引用。
 
@@ -291,12 +291,12 @@ sudo ./lha-eventd output_dir=/tmp/lha-logs
 如果要启用连续事件输出链路，推荐加载顺序如下：
 
 1. `lha_centos9_resolver.ko`
-2. `lha_centos9_event_sink.ko`
+2. `lha_centos9_event_channel.ko`
 3. 可选：`lha_centos9_avc_capture.ko`
 4. 你们自己的 hook 抓取模块
 5. 用户态 `lha-eventd`
 
-event sink 会创建：
+event channel 会创建：
 
 - 设备节点 `/dev/lha_centos9_event_stream`
 - sysfs 统计目录 `/sys/class/misc/lha_centos9_event_stream/`

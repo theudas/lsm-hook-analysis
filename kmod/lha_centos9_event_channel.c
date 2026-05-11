@@ -1,4 +1,4 @@
-#include "lha_centos9_event_sink.h"
+#include "lha_centos9_event_channel.h"
 
 #include <linux/atomic.h>
 #include <linux/build_bug.h>
@@ -20,7 +20,7 @@
 
 #define LHA_DEFAULT_QUEUE_CAPACITY 1024U
 
-struct lha_event_sink_state {
+struct lha_event_channel_state {
 	spinlock_t lock;
 	struct mutex read_lock;
 	wait_queue_head_t readq;
@@ -44,14 +44,14 @@ module_param_named(queue_capacity, lha_event_queue_capacity, uint, 0644);
 MODULE_PARM_DESC(queue_capacity,
 		 "Maximum number of event frames buffered in the kernel");
 
-static struct lha_event_sink_state lha_event_sink = {
+static struct lha_event_channel_state lha_event_channel = {
 	.miscdev = {
 		.minor = MISC_DYNAMIC_MINOR,
 		.name = LHA_EVENT_STREAM_DEVICE_NAME,
 	},
 };
 
-static const struct lha_event_sink_ops lha_event_sink_ops = {
+static const struct lha_event_channel_ops lha_event_channel_ops = {
 	.owner = THIS_MODULE,
 	.submit = lha_centos9_submit_event,
 };
@@ -106,7 +106,7 @@ static void lha_fill_frame(struct lha_event_frame_v1 *frame,
 
 int lha_centos9_submit_event(const struct lha_enriched_event_v1 *event)
 {
-	struct lha_event_sink_state *sink = &lha_event_sink;
+	struct lha_event_channel_state *sink = &lha_event_channel;
 	struct lha_event_frame_v1 frame;
 	unsigned long flags;
 	u64 seq;
@@ -141,7 +141,7 @@ EXPORT_SYMBOL_GPL(lha_centos9_submit_event);
 
 static int lha_event_stream_open(struct inode *inode, struct file *file)
 {
-	struct lha_event_sink_state *sink = &lha_event_sink;
+	struct lha_event_channel_state *sink = &lha_event_channel;
 
 	if (!READ_ONCE(sink->ready) || READ_ONCE(sink->stopping))
 		return -ENODEV;
@@ -155,7 +155,7 @@ static int lha_event_stream_open(struct inode *inode, struct file *file)
 
 static int lha_event_stream_release(struct inode *inode, struct file *file)
 {
-	struct lha_event_sink_state *sink = file->private_data;
+	struct lha_event_channel_state *sink = file->private_data;
 
 	if (sink)
 		atomic_set(&sink->reader_attached, 0);
@@ -166,7 +166,7 @@ static int lha_event_stream_release(struct inode *inode, struct file *file)
 static ssize_t lha_event_stream_read(struct file *file, char __user *buf,
 				     size_t count, loff_t *ppos)
 {
-	struct lha_event_sink_state *sink = file->private_data;
+	struct lha_event_channel_state *sink = file->private_data;
 	struct lha_event_frame_v1 *frames;
 	size_t frame_size = sizeof(struct lha_event_frame_v1);
 	size_t records_requested;
@@ -243,7 +243,7 @@ out_unlock:
 
 static __poll_t lha_event_stream_poll(struct file *file, poll_table *wait)
 {
-	struct lha_event_sink_state *sink = file->private_data;
+	struct lha_event_channel_state *sink = file->private_data;
 	__poll_t mask = 0;
 
 	if (!sink)
@@ -307,7 +307,7 @@ static ssize_t queue_capacity_show(struct device *dev,
 				   struct device_attribute *attr,
 				   char *buf)
 {
-	return scnprintf(buf, PAGE_SIZE, "%u\n", lha_event_sink.queue_capacity);
+	return scnprintf(buf, PAGE_SIZE, "%u\n", lha_event_channel.queue_capacity);
 }
 
 static ssize_t queue_depth_show(struct device *dev,
@@ -317,9 +317,9 @@ static ssize_t queue_depth_show(struct device *dev,
 	unsigned long flags;
 	u32 count;
 
-	spin_lock_irqsave(&lha_event_sink.lock, flags);
-	count = lha_event_sink.count;
-	spin_unlock_irqrestore(&lha_event_sink.lock, flags);
+	spin_lock_irqsave(&lha_event_channel.lock, flags);
+	count = lha_event_channel.count;
+	spin_unlock_irqrestore(&lha_event_channel.lock, flags);
 
 	return scnprintf(buf, PAGE_SIZE, "%u\n", count);
 }
@@ -329,7 +329,7 @@ static ssize_t submitted_total_show(struct device *dev,
 				    char *buf)
 {
 	return scnprintf(buf, PAGE_SIZE, "%lld\n",
-			 (long long)atomic64_read(&lha_event_sink.submitted_total));
+			 (long long)atomic64_read(&lha_event_channel.submitted_total));
 }
 
 static ssize_t dropped_total_show(struct device *dev,
@@ -337,7 +337,7 @@ static ssize_t dropped_total_show(struct device *dev,
 				  char *buf)
 {
 	return scnprintf(buf, PAGE_SIZE, "%lld\n",
-			 (long long)atomic64_read(&lha_event_sink.dropped_total));
+			 (long long)atomic64_read(&lha_event_channel.dropped_total));
 }
 
 static ssize_t reader_attached_show(struct device *dev,
@@ -345,7 +345,7 @@ static ssize_t reader_attached_show(struct device *dev,
 				    char *buf)
 {
 	return scnprintf(buf, PAGE_SIZE, "%d\n",
-			 atomic_read(&lha_event_sink.reader_attached));
+			 atomic_read(&lha_event_channel.reader_attached));
 }
 
 static ssize_t last_drop_ns_show(struct device *dev,
@@ -353,7 +353,7 @@ static ssize_t last_drop_ns_show(struct device *dev,
 				 char *buf)
 {
 	return scnprintf(buf, PAGE_SIZE, "%lld\n",
-			 (long long)atomic64_read(&lha_event_sink.last_drop_ns));
+			 (long long)atomic64_read(&lha_event_channel.last_drop_ns));
 }
 
 static DEVICE_ATTR_RO(abi_version);
@@ -404,9 +404,9 @@ static void lha_event_stream_remove_attrs(struct device *dev)
 		device_remove_file(dev, lha_event_stream_attrs[i]);
 }
 
-static int __init lha_centos9_event_sink_init(void)
+static int __init lha_centos9_event_channel_init(void)
 {
-	struct lha_event_sink_state *sink = &lha_event_sink;
+	struct lha_event_channel_state *sink = &lha_event_channel;
 	int rc;
 
 	lha_check_payload_layout();
@@ -451,7 +451,7 @@ static int __init lha_centos9_event_sink_init(void)
 		return rc;
 	}
 
-	rc = lha_centos9_register_event_sink(&lha_event_sink_ops);
+	rc = lha_centos9_register_event_channel(&lha_event_channel_ops);
 	if (rc) {
 		lha_event_stream_remove_attrs(sink->miscdev.this_device);
 		misc_deregister(&sink->miscdev);
@@ -461,20 +461,20 @@ static int __init lha_centos9_event_sink_init(void)
 	}
 
 	sink->ready = true;
-	pr_info("lha_centos9_event_sink loaded with queue_capacity=%u\n",
+	pr_info("lha_centos9_event_channel loaded with queue_capacity=%u\n",
 		sink->queue_capacity);
 	return 0;
 }
 
-static void __exit lha_centos9_event_sink_exit(void)
+static void __exit lha_centos9_event_channel_exit(void)
 {
-	struct lha_event_sink_state *sink = &lha_event_sink;
+	struct lha_event_channel_state *sink = &lha_event_channel;
 
 	sink->stopping = true;
 	sink->ready = false;
 	wake_up_interruptible(&sink->readq);
 
-	lha_centos9_unregister_event_sink(&lha_event_sink_ops);
+	lha_centos9_unregister_event_channel(&lha_event_channel_ops);
 	if (sink->miscdev.this_device)
 		lha_event_stream_remove_attrs(sink->miscdev.this_device);
 	misc_deregister(&sink->miscdev);
@@ -486,12 +486,12 @@ static void __exit lha_centos9_event_sink_exit(void)
 	sink->tail = 0;
 	sink->count = 0;
 
-	pr_info("lha_centos9_event_sink unloaded\n");
+	pr_info("lha_centos9_event_channel unloaded\n");
 }
 
-module_init(lha_centos9_event_sink_init);
-module_exit(lha_centos9_event_sink_exit);
+module_init(lha_centos9_event_channel_init);
+module_exit(lha_centos9_event_channel_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("OpenAI Codex");
-MODULE_DESCRIPTION("CentOS Stream 9 event sink for continuous enriched events");
+MODULE_DESCRIPTION("CentOS Stream 9 event channel for continuous enriched events");

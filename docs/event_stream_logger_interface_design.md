@@ -41,14 +41,14 @@
 
 - `resolver`
   只负责把 hook 现场输入解析成 `lha_enriched_event_v1`
-- `event_sink`
+- `event_channel`
   只负责把结构化事件稳定送到连续输出通道
 - `lha-eventd`
   只负责读取、校验、序列化、按天落盘、flush/fsync、错误重试
 
 需要特别说明：
 
-- `lha_centos9_submit_event()` 仍然存在，并且仍然是 `event_sink` 的底层提交接口
+- `lha_centos9_submit_event()` 仍然存在，并且仍然是 `event_channel` 的底层提交接口
 - 但对普通生产调用方来说，当前实现已经把“自动送流”放进了 `lha_centos9_resolve_event()`
 - 因此外部 hook 抓取模块通常只需要调用 `lha_centos9_resolve_event()`
 - 如果某些内部流程只想解析、不想自动送流，则使用 `lha_centos9_resolve_event_no_submit()`
@@ -64,7 +64,7 @@ int lha_centos9_resolve_event(const struct lha_capture_event_v1 *in,
 			      struct lha_enriched_event_v1 *out);
 ```
 
-当前实现中，这仍然是外部抓取模块获得统一结构化结果的主入口，而且它会在成功返回前自动尝试把结果送入 `event_sink`。
+当前实现中，这仍然是外部抓取模块获得统一结构化结果的主入口，而且它会在成功返回前自动尝试把结果送入 `event_channel`。
 
 另外还新增了一个“只解析、不自动送流”的变体：
 
@@ -82,7 +82,7 @@ int lha_centos9_resolve_event_no_submit(const struct lha_capture_event_v1 *in,
 
 底层事件提交通道仍保留以下接口：
 
-- `kmod/lha_centos9_event_sink.h`
+- `kmod/lha_centos9_event_channel.h`
 
 导出接口为：
 
@@ -93,14 +93,14 @@ int lha_centos9_submit_event(const struct lha_enriched_event_v1 *event);
 在当前代码里，它的定位是：
 
 - `resolver` 自动送流时，最终会走到这层
-- `event_sink` 作为独立模块，仍然通过它接收事件
+- `event_channel` 作为独立模块，仍然通过它接收事件
 - 但普通外部调用方通常不需要自己显式调用它
 
 语义约束：
 
-- `event_sink` 在接口返回前完成深拷贝，不持有调用方传入指针
+- `event_channel` 在接口返回前完成深拷贝，不持有调用方传入指针
 - 调用方只负责传入一个已完成解析的只读事件
-- `event_sink` 不关心日志目录、文件名、轮转策略和 JSON 格式
+- `event_channel` 不关心日志目录、文件名、轮转策略和 JSON 格式
 - 接口本身应设计为有界、非阻塞、无文件 I/O
 
 建议返回值：
@@ -110,7 +110,7 @@ int lha_centos9_submit_event(const struct lha_enriched_event_v1 *event);
 - `-EINVAL`
   `event == NULL` 或 `event->version` 不受支持
 - `-ENODEV`
-  `event_sink` 未初始化完成或已进入关闭流程
+  `event_channel` 未初始化完成或已进入关闭流程
 - `-ENOSPC`
   队列已满，事件未入队，调用方可据此统计丢包
 
@@ -127,7 +127,7 @@ int lha_centos9_submit_event(const struct lha_enriched_event_v1 *event);
 
 1. 在 hook 现场建立 `task/cred/inode/file` 的稳定引用
 2. 在 `workqueue` 或 `kthread` 中调用 `lha_centos9_resolve_event()`
-3. `lha_centos9_resolve_event()` 成功返回前，内部自动尝试把结果送入 `event_sink`
+3. `lha_centos9_resolve_event()` 成功返回前，内部自动尝试把结果送入 `event_channel`
 4. 如需 JSON 调试输出，再调用 `lha_centos9_format_json()`
 5. 调用方释放自己持有的稳定引用
 
@@ -163,7 +163,7 @@ v1 推荐使用：
 
 建议设备名：
 
-- 模块名：`lha_centos9_event_sink.ko`
+- 模块名：`lha_centos9_event_channel.ko`
 - 设备节点：`/dev/lha_centos9_event_stream`
 
 v1 不建议使用：
@@ -176,7 +176,7 @@ v1 不建议使用：
 
 这些方案要么运维边界不清，要么会把可靠性和复杂度一起放大。
 
-## 6. `event_sink` 如何把事件交给用户态
+## 6. `event_channel` 如何把事件交给用户态
 
 这一节不是在讲 `resolver` 如何解析事件，而是在讲：
 
@@ -187,13 +187,13 @@ v1 不建议使用：
 
 换句话说，这一节定义的是：
 
-- `event_sink` 和用户态 `lha-eventd` 之间的通信协议
+- `event_channel` 和用户态 `lha-eventd` 之间的通信协议
 - 内核把事件交给用户态时，双方要遵守的数据格式和读取规则
 
 可以先把它理解成下面这件事：
 
 - `resolver` 先得到一个 `lha_enriched_event_v1`
-- `event_sink` 再把它包装成一条“用户态可读记录”
+- `event_channel` 再把它包装成一条“用户态可读记录”
 - `lha-eventd` 从设备节点里把这条记录读出来
 - 读出来以后，再决定怎么转成 JSON 和怎么写文件
 
@@ -212,7 +212,7 @@ v1 不建议使用：
 
 ```text
 resolver
-    -> event_sink
+    -> event_channel
     -> /dev/lha_centos9_event_stream
     -> lha-eventd
 ```
@@ -372,7 +372,7 @@ v1 约束如下：
 
 `seq` 的推荐语义如下：
 
-- 每次事件真正进入 `event_sink` 队列时先分配一个单调递增序号
+- 每次事件真正进入 `event_channel` 队列时先分配一个单调递增序号
 - 只有成功入队的事件才能被用户态读到
 - 用户态看到的 `seq` 必须严格递增
 - 若当前 `seq` 与上一条收到的 `seq` 之间存在 gap，则 gap 大小等于中间丢失事件数
@@ -577,14 +577,14 @@ injector
 - 通道内直接输出 JSON 文本
 - 混合多种输出后端
 
-如果后续要做更复杂能力，建议在 `event_sink` 或 `lha-eventd` 层面演进，不要改动 `resolver` 的职责定义。
+如果后续要做更复杂能力，建议在 `event_channel` 或 `lha-eventd` 层面演进，不要改动 `resolver` 的职责定义。
 
 ## 10. 推荐落地顺序
 
 建议按下面顺序推进实现：
 
 1. 新增共享 UAPI 头文件，先冻结 `frame header + payload` 结构
-2. 实现 `lha_centos9_event_sink.ko` 和 `lha_centos9_submit_event()`
+2. 实现 `lha_centos9_event_channel.ko` 和 `lha_centos9_submit_event()`
 3. 在 `resolver` 中补上自动送流注册/调用逻辑，并保留 `lha_centos9_resolve_event_no_submit()`
 4. 暴露 `/dev/lha_centos9_event_stream` 与基础 sysfs 统计
 5. 实现 `lha-eventd` 的阻塞读、NDJSON 序列化与按天落盘
@@ -601,7 +601,7 @@ injector
 生产级方案的关键不是让 `resolver` 学会“持续写日志”，而是把职责分成三段：
 
 - `resolver` 产出稳定结构化事件
-- `event_sink` 提供连续、可观测的本机事件流
+- `event_channel` 提供连续、可观测的本机事件流
 - `lha-eventd` 负责序列化、目录、命名、轮转和落盘
 
 对当前仓库而言，v1 最合适的接口收敛方式是：

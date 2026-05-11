@@ -4,8 +4,8 @@
 
 注意：当前代码语义已经更新为：
 
-- `lha_centos9_resolve_event()` 在成功返回前，会自动尝试把解析结果送入已注册的 `event_sink`
-- 如果 `lha_centos9_event_sink.ko` 未加载，解析本身仍然成功，只是不会进入连续事件流
+- `lha_centos9_resolve_event()` 在成功返回前，会自动尝试把解析结果送入已注册的 `event_channel`
+- 如果 `lha_centos9_event_channel.ko` 未加载，解析本身仍然成功，只是不会进入连续事件流
 - 少数内部场景如果只想解析、不想自动送流，可使用 `lha_centos9_resolve_event_no_submit()`
 
 ## 1. 适用范围
@@ -48,7 +48,7 @@ resolver 的职责是：
 
 如果要理解连续事件输出链路，还需要知道：
 
-- `kmod/lha_centos9_event_sink.h`
+- `kmod/lha_centos9_event_channel.h`
 - `lha_centos9_submit_event()`
 
 但在当前代码语义下，普通生产调用方通常不需要自己显式调用 `lha_centos9_submit_event()`。
@@ -64,14 +64,14 @@ resolver 的职责是：
 3. 组装 `struct lha_capture_event_v1`。
 4. 把事件放到 `workqueue` 或 `kthread`。
 5. 在 worker 中调用 `lha_centos9_resolve_event()`。
-6. `lha_centos9_resolve_event()` 成功返回前，会自动尝试把结果送到 `event_sink`。
+6. `lha_centos9_resolve_event()` 成功返回前，会自动尝试把结果送到 `event_channel`。
 7. 如需 JSON，再调用 `lha_centos9_format_json()`。
 8. 调用方释放之前建立的引用。
 
 这意味着：
 
-- 如果已经加载 `lha_centos9_event_sink.ko`，并且用户态 `lha-eventd` 正在读 `/dev/lha_centos9_event_stream`，那么第 5 步成功后，事件通常会继续出现在日志文件里
-- 如果 `event_sink` 没加载，`lha_centos9_resolve_event()` 仍然可以作为纯解析接口使用
+- 如果已经加载 `lha_centos9_event_channel.ko`，并且用户态 `lha-eventd` 正在读 `/dev/lha_centos9_event_stream`，那么第 5 步成功后，事件通常会继续出现在日志文件里
+- 如果 `event_channel` 没加载，`lha_centos9_resolve_event()` 仍然可以作为纯解析接口使用
 
 ## 4. 稳定引用要求
 
@@ -231,7 +231,7 @@ static int queue_capture_event(struct task_struct *task,
 在当前代码语义下，这段示例已经具备两种效果：
 
 - `out` 中拿到完整结构化结果
-- 如果 `event_sink` 已加载，会自动把同一条结果送入连续事件流
+- 如果 `event_channel` 已加载，会自动把同一条结果送入连续事件流
 
 如果某个内部流程只想解析、不想自动送流，可以改调：
 
