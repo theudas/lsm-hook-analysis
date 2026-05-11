@@ -153,7 +153,121 @@ cat /sys/kernel/debug/lha_centos9/last_json
 - `result.policy_result`
   基于 resolver 内置 AVC deny 关联得到的策略结果
 
-## 7. 生产接入的最小顺序
+## 7. 通过日志查看 injector 注入事件
+
+当前代码里，`lha_centos9_resolve_event()` 在成功返回前会自动尝试把解析结果送入 `event_sink`。
+
+因此，只要同时满足下面几个条件，就可以在用户态日志文件里看到 injector 注入的事件：
+
+- 已加载 `lha_centos9_resolver.ko`
+- 已加载 `lha_centos9_event_sink.ko`
+- 已加载 `lha_centos9_injector.ko`
+- 已挂载 debugfs
+- 用户态 `lha-eventd` 正在运行，并成功打开 `/dev/lha_centos9_event_stream`
+
+推荐按下面顺序操作。
+
+### 7.1 加载模块
+
+```bash
+cd /path/to/lsm-hook-analysis/kmod
+make
+sudo insmod lha_centos9_resolver.ko
+sudo insmod lha_centos9_event_sink.ko
+sudo insmod lha_centos9_injector.ko
+sudo mount -t debugfs none /sys/kernel/debug
+```
+
+确认 event sink 设备节点已经存在：
+
+```bash
+ls -l /dev/lha_centos9_event_stream
+```
+
+### 7.2 启动用户态 logger
+
+```bash
+cd /path/to/lsm-hook-analysis/userspace
+make
+sudo pkill -f lha-eventd
+sudo ./lha-eventd output_dir=/tmp/lha-logs
+```
+
+这几条命令的含义是：
+
+- `make`
+  重新编译当前仓库里的 `lha-eventd`
+- `pkill -f lha-eventd`
+  停掉旧的 `lha-eventd`，避免旧进程继续占着设备节点或继续运行旧版本二进制
+- `./lha-eventd output_dir=/tmp/lha-logs`
+  启动新的 logger，并把日志写到 `/tmp/lha-logs/YYYY-MM-DD.log`
+
+默认情况下，如果你不显式指定 `output_dir`，日志会写到：
+
+- `/var/log/lha/YYYY-MM-DD.log`
+
+### 7.3 触发 injector 样例
+
+另开一个终端，执行：
+
+```bash
+echo sample_open | sudo tee /sys/kernel/debug/lha_centos9/inject
+```
+
+你也可以用：
+
+- `sample_inode`
+- `sample_append`
+
+### 7.4 查看日志文件
+
+查看当天日志：
+
+```bash
+cat /tmp/lha-logs/$(date +%F).log
+```
+
+如果你不确定当前文件名，也可以先列目录：
+
+```bash
+ls -l /tmp/lha-logs
+cat /tmp/lha-logs/*.log
+```
+
+如果链路正常，你会看到：
+
+- `last_json` 中有最近一次格式化结果
+- 日志文件中新增一行 NDJSON
+
+### 7.5 用统计项确认链路是否打通
+
+如果日志文件存在但内容不对，优先检查：
+
+```bash
+cat /sys/class/misc/lha_centos9_event_stream/reader_attached
+cat /sys/class/misc/lha_centos9_event_stream/submitted_total
+cat /sys/class/misc/lha_centos9_event_stream/dropped_total
+```
+
+推荐这样理解：
+
+- `reader_attached = 1`
+  说明 `lha-eventd` 已成功打开设备节点
+- `submitted_total` 增长
+  说明 resolver 已把事件送进 event sink
+- `dropped_total = 0`
+  说明当前没有因为队列满而丢包
+
+如果这些值正常，而日志还是空，优先重启一次 `lha-eventd`，确认运行的是最新编译版本：
+
+```bash
+cd /path/to/lsm-hook-analysis/userspace
+make
+sudo pkill -f lha-eventd
+sudo ./lha-eventd output_dir=/tmp/lha-logs
+```
+
+## 8. 生产接入的最小顺序
 
 生产环境不通过 `inject` 文件写假事件。最小接入顺序如下：
 
@@ -172,7 +286,7 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 详细 API 见 [resolver_api_access_guide.md](resolver_api_access_guide.md)。
 
-## 8. 连续事件输出链路
+## 9. 连续事件输出链路
 
 如果要启用连续事件输出链路，推荐加载顺序如下：
 
@@ -195,7 +309,7 @@ event sink 会创建：
 - `dropped_total`
 - `reader_attached`
 
-## 9. 构建并运行 `lha-eventd`
+## 10. 构建并运行 `lha-eventd`
 
 进入 `userspace/` 目录后执行：
 
@@ -233,7 +347,7 @@ make
 - `dir_mode`
 - `file_mode`
 
-## 8. 开启 AVC 调试日志
+## 11. 开启 AVC 调试日志
 
 如果要验证 `lha_centos9_avc_capture.ko` 是否真的抓到了真实 AVC deny，并成功写入 resolver 内部缓存，可以打开两个模块参数：
 
@@ -242,21 +356,21 @@ make
 - `lha_centos9_resolver.debug_avc_cache`
   打印“resolver 是否接受并写入了 AVC 环形缓存”
 
-### 8.1 在加载时开启
+### 11.1 在加载时开启
 
 ```bash
 sudo insmod lha_centos9_resolver.ko debug_avc_cache=1
 sudo insmod lha_centos9_avc_capture.ko debug_capture=1
 ```
 
-### 8.2 模块已加载后在线开启
+### 11.2 模块已加载后在线开启
 
 ```bash
 echo 1 | sudo tee /sys/module/lha_centos9_resolver/parameters/debug_avc_cache
 echo 1 | sudo tee /sys/module/lha_centos9_avc_capture/parameters/debug_capture
 ```
 
-### 8.3 观察日志
+### 11.3 观察日志
 
 ```bash
 sudo dmesg -w
@@ -281,13 +395,13 @@ lha_centos9_resolver: reject avc cache insert: ...
 
 当前实现里，如果 `avc_capture` 遇到还没有显式建模的 SELinux 权限位，会把它们统一输出成 `unknown`，而不是强行归一化到 `exec`、`read` 等已有语义。
 
-### 8.4 重要提醒
+### 11.4 重要提醒
 
 `sample_append` 不能用来验证 `avc_capture` 是否工作，因为 injector 会直接调用 `lha_centos9_record_avc_event()` 往 resolver 缓冲区写一条匹配事件，而不是依赖真实 `selinux_audited` tracepoint。
 
 要验证 `avc_capture`，必须先在系统里触发一条真实 AVC deny，再看上面的调试日志。
 
-## 10. 卸载模块
+## 12. 卸载模块
 
 卸载时应先卸载依赖 resolver 的模块：
 

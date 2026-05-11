@@ -63,6 +63,34 @@ cat /sys/kernel/debug/lha_centos9/last_json
 
 完整操作见 [docs/usage_guide.md](docs/usage_guide.md)。
 
+如果你想直接验证“injector 注入事件后，是否能在用户态日志文件里看到”，推荐按下面步骤：
+
+```bash
+cd kmod
+make
+sudo insmod lha_centos9_resolver.ko
+sudo insmod lha_centos9_event_sink.ko
+sudo insmod lha_centos9_injector.ko
+sudo mount -t debugfs none /sys/kernel/debug
+
+cd ../userspace
+make
+sudo pkill -f lha-eventd
+sudo ./lha-eventd output_dir=/tmp/lha-logs
+```
+
+另开一个终端执行：
+
+```bash
+echo sample_open | sudo tee /sys/kernel/debug/lha_centos9/inject
+cat /tmp/lha-logs/$(date +%F).log
+```
+
+如果链路正常，你会同时看到：
+
+- `/sys/kernel/debug/lha_centos9/last_json` 中有最近一次 JSON
+- `/tmp/lha-logs/YYYY-MM-DD.log` 中新增一行 NDJSON
+
 ## 生产接入方式
 
 生产链路中的典型调用顺序是：

@@ -11,6 +11,8 @@
 - 调用 resolver 导出 API 完成解析和 JSON 格式化
 - 保存最近一次生成的 JSON，便于人工检查
 
+在当前代码里，如果同时加载了 `lha_centos9_event_sink.ko`，并且用户态 `lha-eventd` 正在读取 `/dev/lha_centos9_event_stream`，injector 触发的样例事件也会自动进入用户态日志文件。
+
 它依赖 `lha_centos9_resolver.ko`，模块里也通过 `MODULE_SOFTDEP("pre: lha_centos9_resolver")` 声明了这一点。
 
 ## 2. debugfs 接口
@@ -84,7 +86,7 @@
 
 它还会额外执行一段“匹配 AVC deny 注入”逻辑：
 
-1. 先调用一次 `lha_centos9_resolve_event()` 得到完整解析结果。
+1. 先调用一次 `lha_centos9_resolve_event_no_submit()` 得到完整解析结果。
 2. 用这条结果构造一条完全匹配的 `struct lha_avc_event_v1`。
 3. 调用 `lha_centos9_record_avc_event()` 把 deny 写进 resolver 缓存。
 4. 再次调用 `lha_centos9_resolve_event()`，让最终 `policy_result` 命中 `deny`。
@@ -132,6 +134,34 @@ echo sample_open | sudo tee /sys/kernel/debug/lha_centos9/inject
 cat /sys/kernel/debug/lha_centos9/last_json
 ```
 
+如果你想验证“injector 注入事件后，用户态日志里也能看到”，推荐使用下面顺序：
+
+```bash
+cd kmod
+make
+sudo insmod lha_centos9_resolver.ko
+sudo insmod lha_centos9_event_sink.ko
+sudo insmod lha_centos9_injector.ko
+sudo mount -t debugfs none /sys/kernel/debug
+
+cd ../userspace
+make
+sudo pkill -f lha-eventd
+sudo ./lha-eventd output_dir=/tmp/lha-logs
+```
+
+另开一个终端执行：
+
+```bash
+echo sample_open | sudo tee /sys/kernel/debug/lha_centos9/inject
+cat /tmp/lha-logs/$(date +%F).log
+```
+
+如果链路正常，你会同时观察到：
+
+- `/sys/kernel/debug/lha_centos9/last_json` 被更新
+- `/tmp/lha-logs/YYYY-MM-DD.log` 新增一条 NDJSON 记录
+
 ## 7. 使用边界
 
 injector 只适合：
@@ -160,3 +190,6 @@ injector 只适合：
 - `dmesg`
 - `lsmod | grep lha`
 - `/sys/kernel/debug/lha_centos9/last_json`
+- `/sys/class/misc/lha_centos9_event_stream/reader_attached`
+- `/sys/class/misc/lha_centos9_event_stream/submitted_total`
+- `/sys/class/misc/lha_centos9_event_stream/dropped_total`
