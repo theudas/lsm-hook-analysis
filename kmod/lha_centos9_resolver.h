@@ -48,13 +48,13 @@ struct lha_avc_match_options {
 };
 
 struct lha_capture_event_v1 {
-	__u16 version;
-	__u16 hook_id;
-	__u64 ts_ns;
-	__s32 ret;
+	__u16 version; // 固定填 1
+	__u16 hook_id; // 事件来源的 LSM hook 类型
+	__u64 ts_ns; // LSM hook 现场时间戳
+	__s32 ret; // LSM hook 返回值
 	struct {
-		struct task_struct *task;
-		const struct cred *cred;
+		struct task_struct *task; // 触发 hook 访问的任务对象
+		const struct cred *cred; // 与 task 对应的 SELinux 对象
 	} subject;
 	union {
 		struct {
@@ -68,7 +68,7 @@ struct lha_capture_event_v1 {
 			struct file *file;
 			__s32 mask;
 		} file_permission;
-	} args;
+	} args; // LSM hook 的输入参数
 };
 
 struct lha_subject_v1 {
@@ -100,15 +100,15 @@ struct lha_result_v1 {
 };
 
 struct lha_enriched_event_v1 {
-	__u16 version;
-	__u16 hook_id;
-	__u64 timestamp_ns;
-	char hook[LHA_MAX_HOOK_LEN];
-	char hook_signature[LHA_MAX_SIG_LEN];
-	struct lha_subject_v1 subject;
-	struct lha_request_v1 request;
-	struct lha_target_v1 target;
-	struct lha_result_v1 result;
+	__u16 version; // 固定填 1
+	__u16 hook_id; // 事件来源的 LSM hook 类型
+	__u64 timestamp_ns; // LSM hook 事件时间戳
+	char hook[LHA_MAX_HOOK_LEN]; // hook 名称字符串，例如 inode_permission / file_open / file_permission
+	char hook_signature[LHA_MAX_SIG_LEN]; // hook 签名字符串，用于描述这类 hook 的参数语义
+	struct lha_subject_v1 subject; // 访问主体信息，包含 pid/tid/comm/scontext
+	struct lha_request_v1 request; // 请求语义信息，包含原始 mask、对象类型和解析后的权限字符串
+	struct lha_target_v1 target; // 访问目标信息，包含 dev/ino/type/path/tclass/tcontext
+	struct lha_result_v1 result; // 结果信息，包含原始 ret、运行时结果和策略结果
 };
 
 /*
