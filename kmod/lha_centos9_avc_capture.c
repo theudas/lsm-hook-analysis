@@ -24,14 +24,14 @@
  * not available to a standalone module built from this repository.
  */
 struct lha_selinux_audit_data {
-	u32 ssid;
-	u32 tsid;
-	u16 tclass;
-	u32 requested;
-	u32 audited;
-	u32 denied;
-	int result;
-	void *state;
+	u32 ssid; // source sid，主体安全标识
+	u32 tsid; // target sid，目标安全标识
+	u16 tclass; // 目标对象的安全类
+	u32 requested; // 本次请求的权限位图
+	u32 audited; // 被审计记录的权限位图
+	u32 denied; // 被拒绝的权限位图
+	int result; // SELinux 检查结果
+	void *state; // SELinux 内部状态指针
 };
 
 static struct tracepoint *lha_avc_tracepoint;
