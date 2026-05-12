@@ -86,8 +86,8 @@ struct lha_event_payload_v1 {
 };
 
 struct lha_event_frame_v1 {
-	struct lha_event_frame_hdr_v1 hdr; // 通道传输元数据
-	struct lha_event_payload_v1 payload; // 结构化业务事件内容
+	struct lha_event_frame_hdr_v1 hdr; // channel 传输元数据
+	struct lha_event_payload_v1 payload; // 结构化 lsm hook 事件内容
 };
 
 #endif
