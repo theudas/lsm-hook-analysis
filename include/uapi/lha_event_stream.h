@@ -33,61 +33,61 @@ enum lha_event_frame_type {
 };
 
 struct lha_event_frame_hdr_v1 {
-	__u32 magic;
-	__u16 abi_version;
-	__u16 frame_type;
-	__u16 header_len;
-	__u16 payload_version;
-	__u32 payload_len;
-	__u64 seq;
-	__u64 emitted_ns;
-	__u32 flags;
-	__u32 reserved0;
+	__u32 magic; // 事件帧魔数，用于校验这是不是合法帧
+	__u16 abi_version; // 事件流通道 ABI 版本
+	__u16 frame_type; // 帧类型，当前为数据帧
+	__u16 header_len; // 帧头长度
+	__u16 payload_version; // 载荷结构版本
+	__u32 payload_len; // 载荷长度
+	__u64 seq; // 事件序号，用于检测丢包和断档
+	__u64 emitted_ns; // 事件写入通道时的时间戳
+	__u32 flags; // 标志位，当前预留
+	__u32 reserved0; // 预留字段
 };
 
 struct lha_event_subject_v1 {
-	__u32 pid;
-	__u32 tid;
-	char scontext[LHA_MAX_CONTEXT_LEN];
-	char comm[LHA_MAX_COMM_LEN];
+	__u32 pid; // 进程 pid
+	__u32 tid; // 线程 tid
+	char scontext[LHA_MAX_CONTEXT_LEN]; // 主体的 SELinux context
+	char comm[LHA_MAX_COMM_LEN]; // 进程名
 };
 
 struct lha_event_request_v1 {
-	__s32 mask_raw;
-	char obj_type[LHA_MAX_TYPE_LEN];
-	char perm[LHA_MAX_PERM_LEN];
+	__s32 mask_raw; // 原始访问 mask
+	char obj_type[LHA_MAX_TYPE_LEN]; // 目标对象类型，例如 reg/dir
+	char perm[LHA_MAX_PERM_LEN]; // 解析后的权限字符串
 };
 
 struct lha_event_target_v1 {
-	char dev[LHA_MAX_DEV_LEN];
-	__u64 ino;
-	char type[LHA_MAX_TYPE_LEN];
-	char path[LHA_MAX_PATH_LEN];
-	char tclass[LHA_MAX_TYPE_LEN];
-	char tcontext[LHA_MAX_CONTEXT_LEN];
+	char dev[LHA_MAX_DEV_LEN]; // 目标所在设备标识
+	__u64 ino; // 目标 inode 号
+	char type[LHA_MAX_TYPE_LEN]; // 目标对象类型，例如 reg/dir
+	char path[LHA_MAX_PATH_LEN]; // 目标路径
+	char tclass[LHA_MAX_TYPE_LEN]; // 目标对象安全类
+	char tcontext[LHA_MAX_CONTEXT_LEN]; // 目标的 SELinux context
 };
 
 struct lha_event_result_v1 {
-	__s32 ret;
-	char runtime_result[LHA_MAX_RESULT_LEN];
-	char policy_result[LHA_MAX_RESULT_LEN];
+	__s32 ret; // 原始 hook 返回值
+	char runtime_result[LHA_MAX_RESULT_LEN]; // 运行时结果，例如 allow/deny/error
+	char policy_result[LHA_MAX_RESULT_LEN]; // 策略结果，例如 deny/inferred_allow/unknown
 };
 
 struct lha_event_payload_v1 {
-	__u16 version;
-	__u16 hook_id;
-	__u64 timestamp_ns;
-	char hook[LHA_MAX_HOOK_LEN];
-	char hook_signature[LHA_MAX_SIG_LEN];
-	struct lha_event_subject_v1 subject;
-	struct lha_event_request_v1 request;
-	struct lha_event_target_v1 target;
-	struct lha_event_result_v1 result;
+	__u16 version; // 事件载荷版本，当前固定填 1
+	__u16 hook_id; // 事件来源的 LSM hook 类型
+	__u64 timestamp_ns; // 原始 LSM hook 事件时间戳
+	char hook[LHA_MAX_HOOK_LEN]; // hook 名称字符串
+	char hook_signature[LHA_MAX_SIG_LEN]; // hook 函数原型字符串
+	struct lha_event_subject_v1 subject; // 访问主体信息
+	struct lha_event_request_v1 request; // 请求语义信息
+	struct lha_event_target_v1 target; // 访问目标信息
+	struct lha_event_result_v1 result; // 运行结果和策略结果
 };
 
 struct lha_event_frame_v1 {
-	struct lha_event_frame_hdr_v1 hdr;
-	struct lha_event_payload_v1 payload;
+	struct lha_event_frame_hdr_v1 hdr; // 通道传输元数据
+	struct lha_event_payload_v1 payload; // 结构化业务事件内容
 };
 
 #endif
