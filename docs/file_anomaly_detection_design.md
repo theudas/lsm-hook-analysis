@@ -427,3 +427,458 @@ normal
 - SELinux `policy_result` 与用户态策略的深度一致性判断
 
 这些可以在后续输入字段更完整后再扩展。
+
+## 8. 单元测试样例对照
+
+本节把当前单元测试中的输入与输出结论展开说明。完整测试代码见：
+
+```text
+detection/test/test_file_anomaly_detector.py
+```
+
+### 8.1 权限归一化
+
+输入：
+
+```text
+request.perm = open|read|append
+```
+
+输出：
+
+```json
+["read", "write"]
+```
+
+原因：
+
+```text
+open   -> read
+read   -> read
+append -> write
+```
+
+重复的 `read` 会去重，因此最终是 `read, write`。
+
+输入：
+
+```text
+request.perm = exec
+```
+
+输出：
+
+```json
+["execute"]
+```
+
+### 8.2 正常访问
+
+输入：
+
+```json
+[
+  {
+    "policy_ref": "policies[1]",
+    "subject": "file",
+    "effect": "allow",
+    "resource_type": "file",
+    "identifier": "/workspace/outputs/**",
+    "normalized_prefix": "/workspace/outputs/",
+    "actions": ["read", "write", "create"]
+  },
+  {
+    "request": {
+      "perm": "open|read"
+    },
+    "target": {
+      "path": "/workspace/outputs/week_report.md"
+    },
+    "result": {
+      "runtime_result": "allow"
+    }
+  }
+]
+```
+
+输出：
+
+```json
+{
+  "detection": {
+    "status": "normal",
+    "reasons": [],
+    "kernel_actions": ["read"],
+    "allowed_actions": ["read", "write", "create"],
+    "path_in_scope": true
+  }
+}
+```
+
+原因：
+
+```text
+/workspace/outputs/week_report.md 在 /workspace/outputs/ 下
+open|read 归一化为 read
+read 被 actions 覆盖
+runtime_result 为 allow
+```
+
+### 8.3 权限越界
+
+输入：
+
+```json
+[
+  {
+    "policy_ref": "policies[1]",
+    "subject": "file",
+    "effect": "allow",
+    "resource_type": "file",
+    "identifier": "/workspace/outputs/**",
+    "normalized_prefix": "/workspace/outputs/",
+    "actions": ["read", "write", "create"]
+  },
+  {
+    "request": {
+      "perm": "exec"
+    },
+    "target": {
+      "path": "/workspace/outputs/week_report.md"
+    },
+    "result": {
+      "runtime_result": "allow"
+    }
+  }
+]
+```
+
+输出：
+
+```json
+{
+  "detection": {
+    "status": "permission_exceeded",
+    "reasons": ["execute not in actions"],
+    "kernel_actions": ["execute"],
+    "allowed_actions": ["read", "write", "create"],
+    "path_in_scope": true
+  }
+}
+```
+
+原因：
+
+```text
+exec 归一化为 execute
+execute 不在 actions 中
+runtime_result 为 allow，说明这次越权请求实际被允许
+```
+
+### 8.4 资源范围越界
+
+输入：
+
+```json
+[
+  {
+    "policy_ref": "policies[1]",
+    "subject": "file",
+    "effect": "allow",
+    "resource_type": "file",
+    "identifier": "/workspace/outputs/**",
+    "normalized_prefix": "/workspace/outputs/",
+    "actions": ["read", "write", "create"]
+  },
+  {
+    "request": {
+      "perm": "open|read"
+    },
+    "target": {
+      "path": "/etc/hosts"
+    },
+    "result": {
+      "runtime_result": "allow"
+    }
+  }
+]
+```
+
+输出：
+
+```json
+{
+  "detection": {
+    "status": "resource_out_of_scope",
+    "reasons": ["target.path not under normalized_prefix"],
+    "kernel_actions": ["read"],
+    "allowed_actions": ["read", "write", "create"],
+    "path_in_scope": false
+  }
+}
+```
+
+原因：
+
+```text
+/etc/hosts 不在 /workspace/outputs/ 下
+```
+
+### 8.5 被内核拒绝的异常尝试
+
+输入：
+
+```json
+[
+  {
+    "policy_ref": "policies[1]",
+    "subject": "file",
+    "effect": "allow",
+    "resource_type": "file",
+    "identifier": "/workspace/outputs/**",
+    "normalized_prefix": "/workspace/outputs/",
+    "actions": ["read", "write", "create"]
+  },
+  {
+    "request": {
+      "perm": "exec"
+    },
+    "target": {
+      "path": "/workspace/outputs/week_report.md"
+    },
+    "result": {
+      "runtime_result": "deny"
+    }
+  }
+]
+```
+
+输出：
+
+```json
+{
+  "detection": {
+    "status": "blocked_violation_attempt",
+    "reasons": ["execute not in actions"],
+    "kernel_actions": ["execute"],
+    "allowed_actions": ["read", "write", "create"],
+    "path_in_scope": true
+  }
+}
+```
+
+原因：
+
+```text
+exec 超出 actions
+但 runtime_result 为 deny，说明内核已经拒绝这次异常尝试
+```
+
+### 8.6 运行时错误
+
+输入：
+
+```json
+[
+  {
+    "policy_ref": "policies[1]",
+    "subject": "file",
+    "effect": "allow",
+    "resource_type": "file",
+    "identifier": "/workspace/outputs/**",
+    "normalized_prefix": "/workspace/outputs/",
+    "actions": ["read", "write", "create"]
+  },
+  {
+    "request": {
+      "perm": "exec"
+    },
+    "target": {
+      "path": "/workspace/outputs/week_report.md"
+    },
+    "result": {
+      "runtime_result": "error"
+    }
+  }
+]
+```
+
+输出：
+
+```json
+{
+  "detection": {
+    "status": "runtime_error",
+    "reasons": ["execute not in actions", "runtime_result is error"],
+    "kernel_actions": ["execute"],
+    "allowed_actions": ["read", "write", "create"],
+    "path_in_scope": true
+  }
+}
+```
+
+原因：
+
+```text
+runtime_result 为 error 时，检测结论优先标记为 runtime_error
+权限越界原因仍保留在 reasons 中
+```
+
+### 8.7 输入结构错误
+
+输入：
+
+```json
+{
+  "not": "a correlated record"
+}
+```
+
+输出：
+
+```json
+{
+  "detection": {
+    "status": "invalid_input",
+    "reasons": [
+      "input must be a two-element array",
+      "missing policy fields: <policy_object>",
+      "missing kernel event fields: <kernel_event_object>"
+    ],
+    "kernel_actions": [],
+    "allowed_actions": [],
+    "path_in_scope": null
+  }
+}
+```
+
+原因：
+
+```text
+检测模块要求输入必须是 [用户态 file policy, 内核态事件] 二元数组
+```
+
+### 8.8 必要字段缺失
+
+输入：
+
+```json
+[
+  {
+    "policy_ref": "policies[1]",
+    "subject": "file",
+    "effect": "allow",
+    "resource_type": "file",
+    "identifier": "/workspace/outputs/**",
+    "normalized_prefix": "/workspace/outputs/",
+    "actions": ["read", "write", "create"]
+  },
+  {
+    "request": {},
+    "target": {},
+    "result": {}
+  }
+]
+```
+
+输出：
+
+```json
+{
+  "detection": {
+    "status": "invalid_input",
+    "reasons": [
+      "missing kernel event fields: request.perm, target.path, result.runtime_result"
+    ],
+    "kernel_actions": [],
+    "allowed_actions": ["read", "write", "create"],
+    "path_in_scope": null
+  }
+}
+```
+
+原因：
+
+```text
+缺少 request.perm，无法做权限判断
+缺少 target.path，无法做资源范围判断
+缺少 result.runtime_result，无法判断实际运行结果
+```
+
+### 8.9 不支持的策略类型
+
+输入：
+
+```json
+[
+  {
+    "policy_ref": "policies[1]",
+    "subject": "file",
+    "effect": "allow",
+    "resource_type": "tool",
+    "identifier": "/workspace/outputs/**",
+    "normalized_prefix": "/workspace/outputs/",
+    "actions": ["read", "write", "create"]
+  },
+  {
+    "request": {
+      "perm": "open|read"
+    },
+    "target": {
+      "path": "/workspace/outputs/week_report.md"
+    },
+    "result": {
+      "runtime_result": "allow"
+    }
+  }
+]
+```
+
+输出：
+
+```json
+{
+  "detection": {
+    "status": "unsupported_policy",
+    "reasons": ["only file allow policies are supported"],
+    "kernel_actions": ["read"],
+    "allowed_actions": ["read", "write", "create"],
+    "path_in_scope": true
+  }
+}
+```
+
+原因：
+
+```text
+当前检测模块只处理 resource_type=file 且 effect=allow 的策略
+```
+
+### 8.10 NDJSON 坏行
+
+输入：
+
+```text
+not json
+```
+
+输出：
+
+```json
+{
+  "input": "not json",
+  "detection": {
+    "status": "invalid_input",
+    "reasons": ["line 1: invalid json: Expecting value"],
+    "kernel_actions": [],
+    "allowed_actions": [],
+    "path_in_scope": null
+  }
+}
+```
+
+原因：
+
+```text
+单行 JSON 解析失败时，不中断整个检测流程，而是为该行输出 invalid_input
+```
