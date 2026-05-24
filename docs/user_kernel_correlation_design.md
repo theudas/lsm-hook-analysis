@@ -1,121 +1,29 @@
-# 用户态与内核态离线关联设计
+# 用户态 file 策略与内核态 file 事件关联模块设计
 
-## 1. 背景与模块边界
-
-本文档描述在当前项目约束下，用户态 IR 策略与内核态 LSM 事件如何进行离线关联，并明确区分“关联模块”和“异常检测模块”的职责。
-
-核心原则：
+本文档只描述当前已经能拿到的字段如何做关联。原则是：
 
 ```text
-关联模块只产出匹配事实，不产出异常结论。
-异常检测模块基于关联事实判断是否越权或异常。
+关联模块不创造新的字段名，只把用户态已归一化 file policy 与内核态原始日志事件配对输出。
 ```
 
-因此，关联模块不应该直接输出：
+当前不考虑异常检测模块，因此本文档不判断：
+
+- 内核实际操作是否越权
+- 内核访问路径是否越界
+- 内核权限是否被用户态 `actions` 覆盖
+- 这条事件是否正常、异常或高风险
+
+关联模块当前只做一件事：
 
 ```text
-authorized
-permission_exceeded
-resource_out_of_scope
+用用户态 normalized_prefix 匹配内核态 target.path。
+匹配上，就输出这条用户态策略和这条内核态事件。
+匹配不上，就不输出关联记录。
 ```
 
-这些属于异常检测模块的判定结果。
+## 1. 用户态可提供字段
 
-关联模块应该回答的是：
-
-```text
-这条内核态 LSM 文件访问事件，能否在用户态 IR 中找到相关 file policy？
-如果能，命中了哪些 policy？
-匹配依据是什么？
-是否存在歧义？
-```
-
-异常检测模块再回答：
-
-```text
-内核访问路径是否超出用户态允许资源范围？
-内核请求权限是否超出用户态允许权限集合？
-这次访问应该被标记为正常、异常、低置信还是待审计？
-```
-
-## 2. 当前约束
-
-用户态目前只能提供类似下面的策略 JSON：
-
-```json
-{
-  "policies": [
-    {
-      "subject": "waimai",
-      "objects": [
-        {
-          "type": "tool",
-          "identifier": "meituan",
-          "params": [
-            {
-              "name": "city",
-              "identifier": "北京"
-            }
-          ]
-        },
-        {
-          "type": "tool",
-          "identifier": "eleme"
-        }
-      ],
-      "effect": "allow"
-    },
-    {
-      "subject": "file",
-      "object": {
-        "type": "file",
-        "identifier": "/workspace/outputs/**"
-      },
-      "action": ["read", "write", "create"],
-      "effect": "allow"
-    }
-  ]
-}
-```
-
-该输入有几个重要限制：
-
-- 用户态不能提供 `pid` / `tid`。
-- 用户态不能提供 query id / task id。
-- 用户态不能提供可靠的用户任务时间戳。
-- `tool` 资源目前没有稳定的 `tool -> kernel resource` 映射。
-- LSM Hook 侧当前可稳定解析的是文件系统相关访问事件。
-
-因此，当前阶段不做 query/task/pid 级归因，只做 file policy 与 kernel file event 的离线匹配。
-
-## 3. 推荐链路
-
-整体链路分成两个模块：
-
-```text
-用户态 IR JSON
-    -> policy 归一化
-    -> file policy index
-    -> 用户态-内核态关联模块
-    -> correlated_kernel_events.ndjson
-    -> 异常检测模块
-    -> anomaly_events.ndjson
-```
-
-其中：
-
-- 关联模块输出 `correlated_kernel_events.ndjson`
-  只描述内核事件与用户态 policy 的候选匹配关系。
-- 异常检测模块输出 `anomaly_events.ndjson`
-  描述是否越界、越了什么界、风险等级和原因。
-
-## 4. 用户态策略归一化
-
-关联模块首先从用户态 JSON 中筛选可用于内核态文件访问匹配的策略。
-
-### 4.1 file 策略
-
-原始策略：
+用户态原始策略中当前重点关注 file 类型：
 
 ```json
 {
@@ -129,7 +37,7 @@ resource_out_of_scope
 }
 ```
 
-归一化后：
+关联模块使用用户态归一化后的 file policy：
 
 ```json
 {
@@ -143,528 +51,339 @@ resource_out_of_scope
 }
 ```
 
-说明：
+这些字段全部来自用户态归一化结果：
 
-- `policy_ref` 用于回溯原始 JSON 位置。
-- `identifier` 保留用户态原始资源表达。
-- `normalized_prefix` 用于快速做路径前缀匹配。
-- `actions` 是用户态声明的允许权限集合，但关联模块不判断权限是否越界。
+| 字段 | 用途 |
+| --- | --- |
+| `policy_ref` | 回溯原始 JSON 位置 |
+| `subject` | 用户态资源/场景标签，当前 file 策略为 `file` |
+| `effect` | 用户态策略效果，例如 `allow` |
+| `resource_type` | 用户态资源类型，当前为 `file` |
+| `identifier` | 用户态原始资源表达，例如 `/workspace/outputs/**` |
+| `normalized_prefix` | 用于和内核态 `target.path` 做前缀匹配 |
+| `actions` | 用户态允许权限集合，当前只透传，不做判断 |
 
-### 4.2 tool 策略
+`tool` 类型策略当前不参与 file 事件关联，因为你当前没有提供 `tool -> kernel file path/process/label` 的映射。
 
-原始策略：
+## 2. 内核态要取的字段
 
-```json
-{
-  "subject": "waimai",
-  "objects": [
-    {
-      "type": "tool",
-      "identifier": "meituan"
-    }
-  ],
-  "effect": "allow"
-}
-```
-
-归一化后：
+内核态日志示例中已经包含以下结构：
 
 ```json
 {
-  "policy_ref": "policies[0].objects[0]",
-  "subject": "waimai",
-  "effect": "allow",
-  "resource_type": "tool",
-  "identifier": "meituan",
-  "kernel_mappable": false,
-  "reason": "no_tool_to_kernel_resource_mapping"
+  "hook": "selinux_file_open",
+  "hook_signature": "static int selinux_file_open(struct file *file)",
+  "timestamp_ns": 1778482476753106527,
+  "subject": {
+    "pid": 14942,
+    "tid": 14942,
+    "scontext": "unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023",
+    "comm": "tee"
+  },
+  "request": {
+    "mask_raw": 0,
+    "obj_type": "reg",
+    "perm": "open|read"
+  },
+  "target": {
+    "dev": "dm-0",
+    "ino": 34803941,
+    "type": "reg",
+    "path": "/etc/hosts",
+    "tclass": "file",
+    "tcontext": "system_u:object_r:net_conf_t:s0"
+  },
+  "result": {
+    "ret": 0,
+    "runtime_result": "allow",
+    "policy_result": "inferred_allow"
+  }
 }
 ```
 
-当前阶段 `tool` 策略不参与 LSM 文件事件匹配，只在策略索引或统计摘要中保留。后续如果能建立 `tool -> exe/process/SELinux label/kernel resource` 映射表，再扩展 tool 相关关联逻辑。
+关联模块需要内核态取这些字段，字段名保持内核日志原样：
 
-## 5. 内核态事件依赖字段
+| 字段 | 是否用于匹配 | 说明 |
+| --- | --- | --- |
+| `hook` | 否 | 保留事件来源 hook |
+| `hook_signature` | 否 | 保留 hook 函数签名 |
+| `timestamp_ns` | 否 | 保留事件时间戳 |
+| `subject.pid` | 否 | 保留进程 pid |
+| `subject.tid` | 否 | 保留线程 tid |
+| `subject.scontext` | 否 | 保留主体 SELinux context |
+| `subject.comm` | 否 | 保留进程名 |
+| `request.mask_raw` | 否 | 保留原始 mask |
+| `request.obj_type` | 否 | 保留请求对象类型 |
+| `request.perm` | 否 | 保留内核解析权限，后续异常检测模块使用 |
+| `target.dev` | 否 | 保留设备标识 |
+| `target.ino` | 否 | 保留 inode 号 |
+| `target.type` | 辅助 | 辅助确认目标是文件系统对象 |
+| `target.path` | 是 | 与用户态 `normalized_prefix` 做路径前缀匹配 |
+| `target.tclass` | 辅助 | 辅助确认目标安全类是 file/dir 等文件系统对象 |
+| `target.tcontext` | 否 | 保留目标 SELinux context |
+| `result.ret` | 否 | 保留原始 hook 返回值 |
+| `result.runtime_result` | 否 | 保留运行时结果 |
+| `result.policy_result` | 否 | 保留内核侧策略推断结果 |
 
-关联模块主要依赖 LSM 解析事件中的以下字段。
-
-用于事件标识和审计：
-
-```text
-timestamp_ns
-subject.pid
-subject.tid
-subject.comm
-subject.scontext
-hook
-```
-
-用于资源匹配：
-
-```text
-target.type
-target.path
-target.tclass
-```
-
-用于权限透传：
-
-```text
-request.perm
-result.runtime_result
-result.policy_result
-```
-
-注意：
-
-- `request.perm` 需要透传给异常检测模块，但关联模块不做 `request.perm ⊆ policy.actions` 的判定。
-- `runtime_result` / `policy_result` 也只透传，不参与关联模块的异常判定。
-
-## 6. 关联模块的匹配规则
-
-### 6.1 资源类型过滤
-
-v1 只处理文件系统相关内核事件。
-
-如果内核事件不是当前支持的文件资源类型，关联模块输出：
+当前真正用于关联匹配的核心字段只有：
 
 ```text
-correlation_status = unsupported_resource_type
+用户态: normalized_prefix
+内核态: target.path
 ```
 
-### 6.2 路径候选匹配
+`target.type` 和 `target.tclass` 只用于确认这是 file 相关事件。`request.perm`、`result.runtime_result`、`result.policy_result` 都只透传给后续异常检测模块。
 
-关联模块使用用户态 file policy 的 `normalized_prefix` 与内核态 `target.path` 做路径匹配。
+## 3. 关联规则
 
-例如用户态策略：
+### 3.1 file 策略过滤
+
+用户态只取：
 
 ```text
-/workspace/outputs/**
+resource_type == "file"
 ```
 
-归一化为：
+或者从原始 JSON 里等价地取：
 
 ```text
-/workspace/outputs/
+subject == "file"
+object.type == "file"
 ```
 
-内核态路径：
+### 3.2 内核 file 事件过滤
+
+内核态事件只处理 file 相关对象。可使用现有字段做辅助判断：
 
 ```text
-/workspace/outputs/week_report.md
+target.tclass in ["file", "dir", "lnk_file", "chr_file", "blk_file", "fifo_file", "sock_file"]
+或
+target.type in ["reg", "dir", "lnk", "chr", "blk", "fifo", "sock"]
 ```
 
-则该 policy 成为候选策略。
+### 3.3 路径前缀匹配
 
-### 6.3 最长前缀选择
+核心匹配逻辑：
 
-如果多条策略匹配同一路径，关联模块按最长前缀排序。
+```text
+内核态日志中的 target.path startswith 用户态归一化策略中的 normalized_prefix
+```
 
 示例：
 
 ```text
-/workspace/**
-/workspace/outputs/**
+用户态 normalized_prefix = /workspace/outputs/
+内核态 target.path       = /workspace/outputs/week_report.md
+结果                    = 匹配
 ```
 
-路径：
+再比如：
 
 ```text
-/workspace/outputs/week_report.md
+用户态 normalized_prefix = /workspace/outputs/
+内核态 target.path       = /etc/hosts
+结果                    = 不匹配
 ```
 
-优先候选为：
+### 3.4 多条策略同时命中
+
+如果多条用户态 file policy 都匹配同一条内核事件，当前不新增额外字段表达“被选中的策略”或“候选策略列表”。
+
+最简单的输出方式是：
 
 ```text
-/workspace/outputs/**
+每命中一条用户态 file policy，就输出一条 [用户态 file policy, 内核态事件] 配对记录。
 ```
 
-如果只有一个最长前缀候选，则：
+这样输出字段仍然只来自用户态归一化结果和内核态原始日志。
+
+## 4. 关联输出
+
+关联模块输出建议仍然采用 NDJSON，一行一条关联记录：
 
 ```text
-correlation_status = correlated
+correlated_file_events.ndjson
 ```
 
-如果多个候选具有相同最长前缀，且无法唯一选择，则：
+每条记录是一个二元数组：
 
-```text
-correlation_status = ambiguous
-```
+- 第 1 个元素：命中的用户态归一化 file policy
+- 第 2 个元素：命中的内核态日志事件
 
-如果没有任何 file policy 匹配路径，则：
+这样不会新增任何字段名。数组内部的字段全部来自当前已经能提供的数据。
 
-```text
-correlation_status = no_policy_candidate
-```
+### 4.1 命中示例
 
-`no_policy_candidate` 不是异常结论，它只表示关联模块没有找到能解释该路径的用户态 file policy。是否将其视为资源越界，由异常检测模块决定。
-
-## 7. 关联模块输出
-
-关联模块主输出建议采用 NDJSON：
-
-```text
-correlated_kernel_events.ndjson
-```
-
-一行表示一条内核事件的关联结果。
-
-### 7.1 唯一关联成功
+用户态策略：
 
 ```json
 {
-  "event_id": "k_000001",
-  "correlation_status": "correlated",
-  "kernel_event": {
-    "timestamp_ns": 1779612350123456789,
-    "pid": 12345,
-    "tid": 12346,
-    "comm": "agent_worker",
-    "scontext": "system_u:system_r:container_t:s0",
-    "hook": "inode_permission",
-    "target_type": "file",
-    "target_path": "/workspace/outputs/week_report.md",
-    "target_tclass": "file",
-    "request_perm": ["write"],
-    "runtime_result": "allow",
-    "policy_result": "allow"
+  "policy_ref": "policies[1]",
+  "subject": "file",
+  "effect": "allow",
+  "resource_type": "file",
+  "identifier": "/workspace/outputs/**",
+  "normalized_prefix": "/workspace/outputs/",
+  "actions": ["read", "write", "create"]
+}
+```
+
+内核态事件：
+
+```json
+{
+  "hook": "selinux_file_open",
+  "hook_signature": "static int selinux_file_open(struct file *file)",
+  "timestamp_ns": 1778482476753106527,
+  "subject": {
+    "pid": 14942,
+    "tid": 14942,
+    "scontext": "unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023",
+    "comm": "tee"
   },
-  "selected_policy": {
+  "request": {
+    "mask_raw": 0,
+    "obj_type": "reg",
+    "perm": "open|read"
+  },
+  "target": {
+    "dev": "dm-0",
+    "ino": 34803941,
+    "type": "reg",
+    "path": "/workspace/outputs/week_report.md",
+    "tclass": "file",
+    "tcontext": "system_u:object_r:user_home_t:s0"
+  },
+  "result": {
+    "ret": 0,
+    "runtime_result": "allow",
+    "policy_result": "inferred_allow"
+  }
+}
+```
+
+关联输出：
+
+```json
+[
+  {
     "policy_ref": "policies[1]",
     "subject": "file",
     "effect": "allow",
     "resource_type": "file",
     "identifier": "/workspace/outputs/**",
     "normalized_prefix": "/workspace/outputs/",
-    "actions": ["read", "write", "create"],
-    "match_type": "longest_prefix"
+    "actions": ["read", "write", "create"]
   },
-  "candidate_policies": [
-    {
-      "policy_ref": "policies[1]",
-      "identifier": "/workspace/outputs/**",
-      "normalized_prefix": "/workspace/outputs/",
-      "actions": ["read", "write", "create"],
-      "prefix_length": 19
-    }
-  ],
-  "correlation_evidence": {
-    "resource_type_supported": true,
-    "path_candidate_count": 1,
-    "selection_rule": "longest_prefix",
-    "unmatched_reason": null
-  }
-}
-```
-
-这里即使 `request_perm` 是 `write`，`actions` 包含 `write`，关联模块也不输出 `perm_contained = true`。这个集合包含判断属于异常检测模块。
-
-### 7.2 没有策略候选
-
-```json
-{
-  "event_id": "k_000002",
-  "correlation_status": "no_policy_candidate",
-  "kernel_event": {
-    "timestamp_ns": 1779612351123456789,
-    "pid": 12345,
-    "tid": 12346,
-    "comm": "agent_worker",
-    "scontext": "system_u:system_r:container_t:s0",
-    "hook": "inode_permission",
-    "target_type": "file",
-    "target_path": "/workspace/private/secrets.txt",
-    "target_tclass": "file",
-    "request_perm": ["read"],
-    "runtime_result": "allow",
-    "policy_result": "allow"
-  },
-  "selected_policy": null,
-  "candidate_policies": [],
-  "correlation_evidence": {
-    "resource_type_supported": true,
-    "path_candidate_count": 0,
-    "selection_rule": "longest_prefix",
-    "unmatched_reason": "no_file_policy_matches_target_path"
-  }
-}
-```
-
-这里关联模块只说明“没找到用户态策略候选”。异常检测模块可以进一步判定为资源越界或高风险事件。
-
-### 7.3 多策略歧义
-
-```json
-{
-  "event_id": "k_000003",
-  "correlation_status": "ambiguous",
-  "kernel_event": {
-    "timestamp_ns": 1779612352123456789,
-    "pid": 12345,
-    "tid": 12346,
-    "comm": "agent_worker",
-    "scontext": "system_u:system_r:container_t:s0",
-    "hook": "file_permission",
-    "target_type": "file",
-    "target_path": "/workspace/outputs/week_report.md",
-    "target_tclass": "file",
-    "request_perm": ["write"],
-    "runtime_result": "allow",
-    "policy_result": "allow"
-  },
-  "selected_policy": null,
-  "candidate_policies": [
-    {
-      "policy_ref": "policies[1]",
-      "identifier": "/workspace/outputs/**",
-      "normalized_prefix": "/workspace/outputs/",
-      "actions": ["read", "write"],
-      "prefix_length": 19
+  {
+    "hook": "selinux_file_open",
+    "hook_signature": "static int selinux_file_open(struct file *file)",
+    "timestamp_ns": 1778482476753106527,
+    "subject": {
+      "pid": 14942,
+      "tid": 14942,
+      "scontext": "unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023",
+      "comm": "tee"
     },
-    {
-      "policy_ref": "policies[2]",
-      "identifier": "/workspace/outputs/**",
-      "normalized_prefix": "/workspace/outputs/",
-      "actions": ["read"],
-      "prefix_length": 19
+    "request": {
+      "mask_raw": 0,
+      "obj_type": "reg",
+      "perm": "open|read"
+    },
+    "target": {
+      "dev": "dm-0",
+      "ino": 34803941,
+      "type": "reg",
+      "path": "/workspace/outputs/week_report.md",
+      "tclass": "file",
+      "tcontext": "system_u:object_r:user_home_t:s0"
+    },
+    "result": {
+      "ret": 0,
+      "runtime_result": "allow",
+      "policy_result": "inferred_allow"
     }
-  ],
-  "correlation_evidence": {
-    "resource_type_supported": true,
-    "path_candidate_count": 2,
-    "selection_rule": "longest_prefix",
-    "unmatched_reason": "multiple_policies_with_same_prefix_length"
   }
-}
+]
 ```
 
-异常检测模块可以根据自身策略选择：
+### 4.2 未命中示例
 
-- 保守处理为待审计。
-- 使用任一候选允许即可放行。
-- 使用所有候选都允许才认为正常。
-- 按策略优先级字段扩展后重新判断。
-
-## 8. `correlation_status` 定义
-
-关联模块建议固定输出以下状态：
-
-```text
-correlated
-no_policy_candidate
-ambiguous
-no_user_file_policy
-unsupported_resource_type
-invalid_event
-```
-
-含义如下：
-
-- `correlated`
-  找到唯一最优 file policy 候选。
-- `no_policy_candidate`
-  用户态存在 file policy，但没有任何 policy 匹配当前内核路径。
-- `ambiguous`
-  多条 policy 以同等优先级匹配当前内核路径，无法唯一选择。
-- `no_user_file_policy`
-  用户态 JSON 中没有任何可用于文件事件匹配的 file policy。
-- `unsupported_resource_type`
-  内核事件不是当前 v1 支持的文件资源类型。
-- `invalid_event`
-  内核事件缺少必要字段，例如 `target.path` 为空或无法解析。
-
-这些状态描述的是关联质量，不描述是否越权。
-
-## 9. 策略索引输出
-
-关联模块可以额外输出归一化策略索引：
-
-```text
-policy_index.json
-```
-
-示例：
+用户态策略：
 
 ```json
 {
-  "file_policies": [
-    {
-      "policy_ref": "policies[1]",
-      "subject": "file",
-      "effect": "allow",
-      "resource_type": "file",
-      "identifier": "/workspace/outputs/**",
-      "normalized_prefix": "/workspace/outputs/",
-      "actions": ["read", "write", "create"]
-    }
-  ],
-  "tool_policies": [
-    {
-      "policy_ref": "policies[0].objects[0]",
-      "subject": "waimai",
-      "effect": "allow",
-      "resource_type": "tool",
-      "identifier": "meituan",
-      "kernel_mappable": false,
-      "reason": "no_tool_to_kernel_resource_mapping"
-    }
-  ]
+  "policy_ref": "policies[1]",
+  "subject": "file",
+  "effect": "allow",
+  "resource_type": "file",
+  "identifier": "/workspace/outputs/**",
+  "normalized_prefix": "/workspace/outputs/",
+  "actions": ["read", "write", "create"]
 }
 ```
 
-## 10. 关联摘要输出
-
-关联模块可以输出批次级摘要：
-
-```text
-correlation_summary.json
-```
-
-示例：
+内核态事件：
 
 ```json
 {
-  "batch": {
-    "date": "2026-05-24",
-    "kernel_event_count": 120000
+  "hook": "selinux_file_open",
+  "hook_signature": "static int selinux_file_open(struct file *file)",
+  "timestamp_ns": 1778482476753106527,
+  "subject": {
+    "pid": 14942,
+    "tid": 14942,
+    "scontext": "unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023",
+    "comm": "tee"
   },
-  "user_policy": {
-    "file_policy_count": 1,
-    "tool_policy_count": 2,
-    "kernel_mappable_tool_count": 0
+  "request": {
+    "mask_raw": 0,
+    "obj_type": "reg",
+    "perm": "open|read"
   },
-  "correlation_result": {
-    "correlated_count": 93000,
-    "no_policy_candidate_count": 3200,
-    "ambiguous_count": 0,
-    "no_user_file_policy_count": 0,
-    "unsupported_resource_type_count": 18000,
-    "invalid_event_count": 0
+  "target": {
+    "dev": "dm-0",
+    "ino": 34803941,
+    "type": "reg",
+    "path": "/etc/hosts",
+    "tclass": "file",
+    "tcontext": "system_u:object_r:net_conf_t:s0"
   },
-  "top_no_policy_candidate_paths": [
-    "/etc/passwd",
-    "/workspace/private/secrets.txt"
-  ]
-}
-```
-
-摘要只描述关联效果，不统计 `permission_exceeded_count` 这类异常检测结论。
-
-## 11. 异常检测模块如何消费
-
-异常检测模块读取：
-
-```text
-correlated_kernel_events.ndjson
-```
-
-然后自行完成权限和异常判断。
-
-基础逻辑可以是：
-
-```text
-correlation_status == correlated
-    -> 比较 kernel_event.request_perm 与 selected_policy.actions
-
-correlation_status == no_policy_candidate
-    -> 可判定为资源范围外访问候选
-
-correlation_status == no_user_file_policy
-    -> 可判定为高风险候选
-
-correlation_status == ambiguous
-    -> 按检测策略处理为待审计或低置信异常
-
-correlation_status == unsupported_resource_type
-    -> 暂不判断
-
-correlation_status == invalid_event
-    -> 数据质量问题或待审计
-```
-
-权限判断使用集合包含关系：
-
-```text
-normalized_kernel_perm ⊆ selected_policy.actions
-```
-
-异常检测模块可以输出自己的结果，例如：
-
-```json
-{
-  "event_id": "k_000003",
-  "anomaly_status": "permission_exceeded",
-  "severity": "high",
-  "basis": {
-    "correlation_status": "correlated",
-    "target_path": "/workspace/outputs/week_report.md",
-    "kernel_perm": ["exec"],
-    "user_allowed_actions": ["read", "write", "create"],
+  "result": {
+    "ret": 0,
     "runtime_result": "allow",
-    "policy_result": "allow"
+    "policy_result": "inferred_allow"
   }
 }
 ```
 
-## 12. 权限名称对齐
-
-权限名称对齐建议放在异常检测模块，或作为异常检测模块独立加载的配置。
-
-内核态 resolver 当前可能输出：
+因为：
 
 ```text
-open
-read
-write
-append
-exec
-search
+/etc/hosts 不以 /workspace/outputs/ 开头
 ```
 
-用户态策略当前可能输出：
+所以关联模块不输出关联记录。
+
+## 5. 后续异常检测模块如何使用
+
+异常检测模块后续读取 `correlated_file_events.ndjson`，再自行使用：
 
 ```text
-read
-write
-create
-delete
-update
+第 2 个元素.request.perm
+第 1 个元素.actions
 ```
 
-v1 可先维护一张简单映射表：
+判断权限是否一致。
+
+也可以使用：
 
 ```text
-open   -> read
-read   -> read
-write  -> write
-append -> write
-exec   -> execute
-search -> read
+第 2 个元素.target.path
+第 1 个元素.identifier
+第 1 个元素.normalized_prefix
 ```
 
-说明：
+判断资源范围是否一致。
 
-- `open` 在没有更细粒度上下文时，可先按 `read` 保守处理。
-- `append` 可先并入 `write`。
-- `search` 多见于目录访问，可先按目录 `read` / `search` 单独观察，后续再决定是否暴露给用户态 IR。
-- `create` 在部分 hook 中可能表现为目录写权限或后续文件写权限，v1 可以先通过 `write` 近似处理。
-
-该映射会影响异常检测结论，因此不建议由关联模块内置并直接产出异常判定。
-
-## 13. 后续扩展方向
-
-后续如果用户态能提供更多锚点，可以逐步增强关联能力：
-
-- 用户会话 id。
-- agent run id。
-- workspace id。
-- sandbox/container id。
-- 用户态任务开始/结束时间。
-- tool 的 `source` / exe 路径。
-- `tool -> process/SELinux label/kernel resource` 映射表。
-
-在这些信息稳定之前，建议保持当前 v1 边界：
-
-```text
-关联模块：只产出 kernel event 与 user file policy 的候选匹配关系。
-异常检测模块：基于关联结果判断资源越界、权限越界和风险等级。
-```
+这些判断不在当前关联模块里完成。
