@@ -64,11 +64,21 @@ echo "[+] lha-eventd built"
 # ---- Step 3: Unload stale modules if any ----
 echo ""
 echo "=== Step 3: Unload stale modules ==="
+# Kill any leftover lha-eventd first (it holds /dev open, blocking event_channel rmmod)
+if pkill -f lha-eventd 2>/dev/null; then
+    echo "[*] Killed leftover lha-eventd"
+    sleep 1
+fi
+# Unload in reverse order to respect dependencies
 for ((i=${#MODULES[@]}-1; i>=0; i--)); do
     mod="${MODULES[$i]}"
-    if lsmod | grep -q "^${mod}"; then
+    if lsmod | grep -q "^${mod} "; then
         echo "[*] Removing leftover $mod"
-        rmmod "$mod" 2>/dev/null || true
+        if ! rmmod "$mod"; then
+            echo "[-] Failed to remove $mod, retrying after 1s..."
+            sleep 1
+            rmmod "$mod" || { echo "[-] Cannot remove $mod, aborting"; exit 1; }
+        fi
     fi
 done
 echo "[+] Clean slate"

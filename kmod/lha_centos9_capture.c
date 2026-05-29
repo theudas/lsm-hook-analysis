@@ -42,6 +42,7 @@ MODULE_PARM_DESC(max_pending,
 		 "Maximum number of events queued for resolver processing");
 
 static atomic_t lha_pending_count = ATOMIC_INIT(0);
+static struct workqueue_struct *lha_capture_wq;
 
 /*
  * Per-kretprobe-instance data saved in the entry handler and consumed in
@@ -177,7 +178,7 @@ static void lha_queue_event(struct lha_capture_data *data, int ret)
 	/* Ownership of refs transferred to pending->ev. */
 	data->refs_valid = false;
 	atomic_inc(&lha_pending_count);
-	schedule_work(&pending->work);
+	queue_work(lha_capture_wq, &pending->work);
 	return;
 
 drop:
@@ -346,11 +347,15 @@ static int __init lha_centos9_capture_init(void)
 {
 	int rc;
 
+	lha_capture_wq = alloc_workqueue("lha_capture", WQ_UNBOUND, 0);
+	if (!lha_capture_wq)
+		return -ENOMEM;
+
 	rc = register_kretprobe(&lha_inode_perm_kretprobe);
 	if (rc) {
 		pr_err("lha_centos9_capture: failed to register kretprobe for selinux_inode_permission: %d\n",
 		       rc);
-		return rc;
+		goto err_destroy_wq;
 	}
 
 	rc = register_kretprobe(&lha_file_open_kretprobe);
@@ -375,6 +380,8 @@ err_unreg_file_open:
 	unregister_kretprobe(&lha_file_open_kretprobe);
 err_unreg_inode:
 	unregister_kretprobe(&lha_inode_perm_kretprobe);
+err_destroy_wq:
+	destroy_workqueue(lha_capture_wq);
 	return rc;
 }
 
@@ -384,11 +391,8 @@ static void __exit lha_centos9_capture_exit(void)
 	unregister_kretprobe(&lha_file_open_kretprobe);
 	unregister_kretprobe(&lha_inode_perm_kretprobe);
 
-	/*
-	 * After unregistering, flush the system workqueue so all pending
-	 * workers finish and release their references before we unload.
-	 */
-	flush_scheduled_work();
+	/* Drain our private workqueue so all pending workers complete. */
+	destroy_workqueue(lha_capture_wq);
 
 	pr_info("lha_centos9_capture: unloaded (missed: inode_perm=%d file_open=%d file_perm=%d)\n",
 		lha_inode_perm_kretprobe.nmissed,
