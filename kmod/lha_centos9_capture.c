@@ -9,6 +9,7 @@
 #include "lha_centos9_resolver.h"
 
 #include <linux/cred.h>
+#include <linux/file.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/kprobes.h>
@@ -17,6 +18,21 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
+
+/*
+ * Architecture-portable kretprobe argument access.
+ * x86_64: di, si, dx, ...
+ * aarch64: regs[0], regs[1], regs[2], ...
+ */
+#if defined(CONFIG_X86_64)
+#define LHA_ARG0(regs) ((regs)->di)
+#define LHA_ARG1(regs) ((regs)->si)
+#elif defined(CONFIG_ARM64)
+#define LHA_ARG0(regs) ((regs)->regs[0])
+#define LHA_ARG1(regs) ((regs)->regs[1])
+#else
+#error "Unsupported architecture for lha_centos9_capture"
+#endif
 
 #define LHA_CAPTURE_DEFAULT_MAX_PENDING 4096
 
@@ -198,8 +214,8 @@ static int lha_inode_perm_entry(struct kretprobe_instance *ri,
 				struct pt_regs *regs)
 {
 	struct lha_capture_data *data = (void *)ri->data;
-	struct inode *inode = (struct inode *)regs->di;
-	int mask = (int)regs->si;
+	struct inode *inode = (struct inode *)LHA_ARG0(regs);
+	int mask = (int)LHA_ARG1(regs);
 
 	memset(data, 0, sizeof(*data));
 	data->hook_id = LHA_HOOK_INODE_PERMISSION;
@@ -244,7 +260,7 @@ static int lha_file_open_entry(struct kretprobe_instance *ri,
 			       struct pt_regs *regs)
 {
 	struct lha_capture_data *data = (void *)ri->data;
-	struct file *file = (struct file *)regs->di;
+	struct file *file = (struct file *)LHA_ARG0(regs);
 
 	memset(data, 0, sizeof(*data));
 	data->hook_id = LHA_HOOK_FILE_OPEN;
@@ -286,8 +302,8 @@ static int lha_file_perm_entry(struct kretprobe_instance *ri,
 			       struct pt_regs *regs)
 {
 	struct lha_capture_data *data = (void *)ri->data;
-	struct file *file = (struct file *)regs->di;
-	int mask = (int)regs->si;
+	struct file *file = (struct file *)LHA_ARG0(regs);
+	int mask = (int)LHA_ARG1(regs);
 
 	memset(data, 0, sizeof(*data));
 	data->hook_id = LHA_HOOK_FILE_PERMISSION;
