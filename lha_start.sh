@@ -39,23 +39,40 @@ else
 fi
 
 # ================================================================
-# Step 2: Unload all modules (reverse order)
+# Step 2: Unload all lha modules
 # ================================================================
 echo ""
 echo "=== Step 2: Unload all modules ==="
-for ((i=${#MODULES[@]}-1; i>=0; i--)); do
-    mod="${MODULES[$i]}"
-    if lsmod | grep -q "^${mod} "; then
-        echo "[*] Removing $mod"
-        rmmod "$mod" || { echo "[-] Failed to remove $mod"; exit 1; }
+
+# Repeatedly scan and remove lha_centos9_* modules with 0 refcount until
+# none remain. This handles arbitrary dependency order without hardcoding.
+MAX_ROUNDS=10
+for ((round=1; round<=MAX_ROUNDS; round++)); do
+    # Collect all loaded lha_centos9_* modules
+    loaded=()
+    while IFS=' ' read -r name _ refcnt deps _rest; do
+        loaded+=("$name")
+    done < <(lsmod | grep "^lha_centos9_")
+
+    [ ${#loaded[@]} -eq 0 ] && break
+
+    removed_any=false
+    for mod in "${loaded[@]}"; do
+        # Try to remove; rmmod will fail if still depended on, that's fine
+        if rmmod "$mod" 2>/dev/null; then
+            echo "[*] Removed $mod"
+            removed_any=true
+        fi
+    done
+
+    if ! $removed_any; then
+        echo "[-] Stuck: cannot remove remaining modules: ${loaded[*]}"
+        echo "    Check 'lsmod | grep lha' for dependencies"
+        exit 1
     fi
 done
-# Also remove injector if loaded
-if lsmod | grep -q "^lha_centos9_injector "; then
-    echo "[*] Removing lha_centos9_injector"
-    rmmod lha_centos9_injector || true
-fi
-echo "[+] All modules unloaded"
+
+echo "[+] All lha modules unloaded"
 
 # ================================================================
 # Step 3: Build everything
