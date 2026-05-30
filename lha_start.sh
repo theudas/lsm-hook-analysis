@@ -52,7 +52,7 @@ for ((round=1; round<=MAX_ROUNDS; round++)); do
     loaded=()
     while IFS=' ' read -r name _ refcnt deps _rest; do
         loaded+=("$name")
-    done < <(lsmod | grep "^lha_centos9_")
+    done < <(lsmod | grep "^lha_centos9_" || true)
 
     [ ${#loaded[@]} -eq 0 ] && break
 
