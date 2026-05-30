@@ -325,6 +325,6 @@ module_init(lha_centos9_injector_init);
 module_exit(lha_centos9_injector_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("OpenAI Codex");
+MODULE_AUTHOR("lha-team");
 MODULE_DESCRIPTION("CentOS Stream 9 self-test injector for the resolver API");
 MODULE_SOFTDEP("pre: lha_centos9_resolver");

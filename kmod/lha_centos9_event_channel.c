@@ -493,5 +493,5 @@ module_init(lha_centos9_event_channel_init);
 module_exit(lha_centos9_event_channel_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("OpenAI Codex");
+MODULE_AUTHOR("lha-team");
 MODULE_DESCRIPTION("CentOS Stream 9 event channel for continuous enriched events");

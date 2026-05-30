@@ -972,5 +972,5 @@ module_init(lha_centos9_resolver_init);
 module_exit(lha_centos9_resolver_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("OpenAI Codex");
+MODULE_AUTHOR("lha-team");
 MODULE_DESCRIPTION("CentOS Stream 9 production SELinux hook resolver");
