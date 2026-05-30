@@ -1,9 +1,13 @@
 #!/bin/bash
 #
-# lha_start.sh — Load all LSM hook analysis modules and start logging.
+# lha_start.sh — Clean, build, load all modules, and start logging.
 #
-# After running this script, any file operation on the system will be
-# captured and logged to /var/log/lha/YYYY-MM-DD.log as NDJSON.
+# Idempotent: safe to run regardless of current machine state (0, partial,
+# or all modules loaded). It will tear everything down first, rebuild from
+# source, then bring the full pipeline up.
+#
+# After running, any file operation is captured and logged as NDJSON to
+# /var/log/lha/YYYY-MM-DD.log.
 #
 # Usage: sudo bash lha_start.sh [project_dir]
 
@@ -15,6 +19,7 @@ KMOD_DIR="$PROJECT_DIR/kmod"
 USERSPACE_DIR="$PROJECT_DIR/userspace"
 LOG_DIR="/var/log/lha"
 
+# Load order; unload is always reversed.
 MODULES=(
     lha_centos9_resolver
     lha_centos9_avc_capture
@@ -22,36 +27,85 @@ MODULES=(
     lha_centos9_capture
 )
 
-# ---- Build if .ko not found ----
-if [ ! -f "$KMOD_DIR/lha_centos9_capture.ko" ]; then
-    echo "[*] Building kernel modules..."
-    make -C "$KMOD_DIR"
-fi
-if [ ! -f "$USERSPACE_DIR/lha-eventd" ]; then
-    echo "[*] Building lha-eventd..."
-    make -C "$USERSPACE_DIR"
+# ================================================================
+# Step 1: Stop lha-eventd (releases /dev device so rmmod can work)
+# ================================================================
+echo "=== Step 1: Stop lha-eventd ==="
+if pkill -f lha-eventd 2>/dev/null; then
+    sleep 1
+    echo "[+] lha-eventd stopped"
+else
+    echo "[*] lha-eventd not running"
 fi
 
-# ---- Load modules ----
-for mod in "${MODULES[@]}"; do
+# ================================================================
+# Step 2: Unload all modules (reverse order)
+# ================================================================
+echo ""
+echo "=== Step 2: Unload all modules ==="
+for ((i=${#MODULES[@]}-1; i>=0; i--)); do
+    mod="${MODULES[$i]}"
     if lsmod | grep -q "^${mod} "; then
-        echo "[*] $mod already loaded, skipping"
-    else
-        echo "[*] Loading $mod"
-        insmod "$KMOD_DIR/${mod}.ko"
+        echo "[*] Removing $mod"
+        rmmod "$mod" || { echo "[-] Failed to remove $mod"; exit 1; }
     fi
 done
-
-# ---- Start lha-eventd ----
-mkdir -p "$LOG_DIR"
-
-if pgrep -f lha-eventd > /dev/null 2>&1; then
-    echo "[*] lha-eventd already running"
-else
-    echo "[*] Starting lha-eventd"
-    nohup "$USERSPACE_DIR/lha-eventd" > /dev/null 2>&1 &
+# Also remove injector if loaded
+if lsmod | grep -q "^lha_centos9_injector "; then
+    echo "[*] Removing lha_centos9_injector"
+    rmmod lha_centos9_injector || true
 fi
+echo "[+] All modules unloaded"
+
+# ================================================================
+# Step 3: Build everything
+# ================================================================
+echo ""
+echo "=== Step 3: Build kernel modules ==="
+make -C "$KMOD_DIR" clean
+make -C "$KMOD_DIR"
+echo "[+] Kernel modules built"
 
 echo ""
-echo "Ready. All file operations are now being captured."
-echo "View logs:  tail -f $LOG_DIR/$(date +%Y-%m-%d).log"
+echo "=== Step 4: Build userspace ==="
+make -C "$USERSPACE_DIR" clean
+make -C "$USERSPACE_DIR"
+echo "[+] lha-eventd built"
+
+# ================================================================
+# Step 5: Load modules
+# ================================================================
+echo ""
+echo "=== Step 5: Load modules ==="
+for mod in "${MODULES[@]}"; do
+    echo "[*] Loading $mod"
+    insmod "$KMOD_DIR/${mod}.ko"
+done
+echo "[+] All modules loaded"
+lsmod | grep lha
+
+# ================================================================
+# Step 6: Start lha-eventd
+# ================================================================
+echo ""
+echo "=== Step 6: Start lha-eventd ==="
+mkdir -p "$LOG_DIR"
+nohup "$USERSPACE_DIR/lha-eventd" > /dev/null 2>&1 &
+sleep 1
+
+if pgrep -f lha-eventd > /dev/null 2>&1; then
+    echo "[+] lha-eventd running"
+else
+    echo "[-] lha-eventd failed to start"
+    exit 1
+fi
+
+# ================================================================
+# Done
+# ================================================================
+echo ""
+echo "============================================"
+echo "  Ready. All file operations are captured."
+echo "  View logs:"
+echo "    tail -f $LOG_DIR/$(date +%Y-%m-%d).log"
+echo "============================================"
