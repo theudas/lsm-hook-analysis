@@ -3,8 +3,9 @@
 本文档只描述当前仓库里真实存在的内核态用法：
 
 - 编译 `kmod/`
-- 加载和卸载 4 个模块
+- 加载和卸载 5 个模块
 - 用 injector 做本地自测
+- 用 capture 模块采集真实 hook 事件
 - 了解生产接入时的最小调用顺序
 - 构建并运行用户态 `lha-eventd`
 
@@ -43,6 +44,7 @@ make KDIR=/path/to/kernel/build
 成功后会生成：
 
 - `lha_centos9_resolver.ko`
+- `lha_centos9_capture.ko`
 - `lha_centos9_injector.ko`
 - `lha_centos9_avc_capture.ko`
 - `lha_centos9_event_channel.ko`
@@ -71,6 +73,12 @@ sudo insmod lha_centos9_avc_capture.ko
 
 ```bash
 sudo insmod lha_centos9_event_channel.ko
+```
+
+如果需要采集真实 LSM hook 事件，再加载 capture：
+
+```bash
+sudo insmod lha_centos9_capture.ko
 ```
 
 推荐检查：
@@ -269,7 +277,17 @@ sudo ./lha-eventd output_dir=/tmp/lha-logs
 
 ## 8. 生产接入的最小顺序
 
-生产环境不通过 `inject` 文件写假事件。最小接入顺序如下：
+当前仓库已提供完整的 hook 捕获模块 `lha_centos9_capture.ko`。生产环境最小接入步骤：
+
+1. 加载 `lha_centos9_resolver.ko`
+2. 可选：加载 `lha_centos9_avc_capture.ko`（启用 deny 关联）
+3. 加载 `lha_centos9_event_channel.ko`
+4. 加载 `lha_centos9_capture.ko`
+5. 启动 `lha-eventd`
+
+capture 模块会自动通过 kretprobe 拦截 SELinux hook 函数，采集参数后异步交给 resolver，resolver 自动将结果送入 event channel。
+
+如果需要自行实现抓取模块而非使用仓库自带的 capture，调用顺序如下：
 
 1. 在真实 hook 现场抓取参数和最终返回值。
 2. 在 hook 现场为 `task`、`cred`、`inode` 或 `file` 建立稳定引用。
@@ -293,7 +311,7 @@ sudo ./lha-eventd output_dir=/tmp/lha-logs
 1. `lha_centos9_resolver.ko`
 2. `lha_centos9_event_channel.ko`
 3. 可选：`lha_centos9_avc_capture.ko`
-4. 你们自己的 hook 抓取模块
+4. `lha_centos9_capture.ko`（仓库自带）或你们自己的 hook 抓取模块
 5. 用户态 `lha-eventd`
 
 event channel 会创建：
@@ -406,12 +424,14 @@ lha_centos9_resolver: reject avc cache insert: ...
 卸载时应先卸载依赖 resolver 的模块：
 
 ```bash
+sudo rmmod lha_centos9_capture
 sudo rmmod lha_centos9_injector
+sudo rmmod lha_centos9_event_channel
 sudo rmmod lha_centos9_avc_capture
 sudo rmmod lha_centos9_resolver
 ```
 
-如果 `rmmod lha_centos9_resolver` 提示 `Module is in use`，说明还有 injector 或其他外部模块依赖它。
+如果 `rmmod lha_centos9_resolver` 提示 `Module is in use`，说明还有 capture、injector 或其他外部模块依赖它。
 
 ## 10. 清理构建产物
 

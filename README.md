@@ -30,10 +30,12 @@
 
 ## 模块组成
 
-`kmod/` 当前会构建 4 个模块：
+`kmod/` 当前会构建 5 个模块：
 
 - `lha_centos9_resolver.ko`
   核心解析模块，提供事件解析、JSON 格式化和 AVC 关联辅助接口
+- `lha_centos9_capture.ko`
+  真实 LSM hook 捕获模块，通过 kretprobe 拦截 SELinux hook 函数，采集参数和返回值并交给 resolver
 - `lha_centos9_injector.ko`
   debugfs 自测模块，用固定样例事件验证 resolver 行为
 - `lha_centos9_avc_capture.ko`
@@ -49,6 +51,8 @@
 
 ## 快速开始
 
+### 使用 injector 自测
+
 模块编译和加载需要在 Linux 环境中完成，并且应使用目标运行内核对应的模块构建目录。
 
 ```bash
@@ -61,47 +65,55 @@ echo sample_open | sudo tee /sys/kernel/debug/lha_centos9/inject
 cat /sys/kernel/debug/lha_centos9/last_json
 ```
 
+### 使用 capture 模块采集真实 hook 事件
+
+仓库提供了一键测试脚本，可自动完成编译、加载、触发事件、验证日志和清理：
+
+```bash
+sudo bash test_capture.sh
+```
+
+手动操作步骤：
+
+```bash
+cd kmod && make
+cd ../userspace && make
+
+sudo insmod kmod/lha_centos9_resolver.ko
+sudo insmod kmod/lha_centos9_avc_capture.ko
+sudo insmod kmod/lha_centos9_event_channel.ko
+sudo insmod kmod/lha_centos9_capture.ko
+
+sudo mkdir -p /var/log/lha
+sudo ./userspace/lha-eventd &
+
+# 触发文件操作
+cat /etc/hosts
+ls /tmp
+
+# 查看日志
+cat /var/log/lha/$(date +%Y-%m-%d).log
+```
+
 完整操作见 [docs/usage_guide.md](docs/usage_guide.md)。
-
-如果你想直接验证“injector 注入事件后，是否能在用户态日志文件里看到”，推荐按下面步骤：
-
-```bash
-cd kmod
-make
-sudo insmod lha_centos9_resolver.ko
-sudo insmod lha_centos9_event_channel.ko
-sudo insmod lha_centos9_injector.ko
-sudo mount -t debugfs none /sys/kernel/debug
-
-cd ../userspace
-make
-sudo pkill -f lha-eventd
-sudo ./lha-eventd output_dir=/tmp/lha-logs
-```
-
-另开一个终端执行：
-
-```bash
-echo sample_open | sudo tee /sys/kernel/debug/lha_centos9/inject
-cat /tmp/lha-logs/$(date +%F).log
-```
-
-如果链路正常，你会同时看到：
-
-- `/sys/kernel/debug/lha_centos9/last_json` 中有最近一次 JSON
-- `/tmp/lha-logs/YYYY-MM-DD.log` 中新增一行 NDJSON
 
 ## 生产接入方式
 
-生产链路中的典型调用顺序是：
+当前仓库已提供完整的采集模块 `lha_centos9_capture.ko`，可直接用于生产链路。典型调用链路是：
+
+1. `lha_centos9_capture.ko` 通过 kretprobe 拦截 SELinux hook 函数，在现场采集参数并建立稳定引用。
+2. 通过私有 workqueue 异步调用 `lha_centos9_resolve_event()`。
+3. 当前实现会在 `lha_centos9_resolve_event()` 成功返回前自动尝试把事件送入 `event_channel`。
+4. 如需 AVC deny 关联，加载 `lha_centos9_avc_capture.ko`。
+5. 用户态 `lha-eventd` 从 `/dev/lha_centos9_event_stream` 读取事件并输出 NDJSON 日志。
+
+如果需要自行实现抓取模块而非使用仓库自带的 capture，典型调用顺序是：
 
 1. 外部抓取模块在 hook 现场保存稳定引用，例如 `get_task_struct()`、`get_cred()`、`igrab()`、`get_file()`。
 2. 组装 `struct lha_capture_event_v1`。
 3. 在 `workqueue` 或 `kthread` 中调用 `lha_centos9_resolve_event()`。
-4. 当前实现会在 `lha_centos9_resolve_event()` 成功返回前自动尝试把事件送入 `event_channel`。
-5. 如需 JSON 调试输出，再调用 `lha_centos9_format_json()`。
-6. 如需 AVC deny 关联，加载 `lha_centos9_avc_capture.ko`，或由外部模块调用 `lha_centos9_record_avc_event()`。
-7. 调用方负责释放之前建立的对象引用。
+4. 如需 JSON 调试输出，再调用 `lha_centos9_format_json()`。
+5. 调用方负责释放之前建立的对象引用。
 
 用户态 logger 可在 `userspace/` 目录构建：
 
@@ -117,8 +129,8 @@ make
 
 ## 关键边界
 
-- 本项目当前不负责注册或抓取真实 LSM hook。
-- resolver 设计为运行在可睡眠上下文中，不建议直接在原始 hook 回调中调用。
+- 当前仓库已提供基于 kretprobe 的真实 LSM hook 捕获模块（`lha_centos9_capture.ko`），支持 x86_64 和 aarch64。
+- resolver 设计为运行在可睡眠上下文中，capture 模块通过 workqueue 满足这一要求。
 - `file *` 路径恢复通常更完整；`inode *` 路径恢复是 best effort。
 - 当前内置 AVC 关联只能稳定表达 deny 证据及其缺失，不能给出强语义的策略 `allow`。
 - `lha_centos9_injector.ko` 仅用于自测，不是生产入口。
@@ -137,6 +149,8 @@ make
   resolver 输出分层、接口设计和生产级演进方案
 - [docs/modules/resolver_module.md](docs/modules/resolver_module.md)
   resolver 模块详细说明
+- [docs/modules/capture_module.md](docs/modules/capture_module.md)
+  capture 模块详细说明
 - [docs/modules/injector_module.md](docs/modules/injector_module.md)
   injector 模块详细说明
 - [docs/modules/avc_capture_module.md](docs/modules/avc_capture_module.md)
