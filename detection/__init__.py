@@ -1,4 +1,4 @@
-"""File anomaly detection helpers."""
+"""File anomaly detection and SELinux policy classification helpers."""
 
 from .file_anomaly_detector import (
     DEFAULT_PERMISSION_MAP,
@@ -7,6 +7,18 @@ from .file_anomaly_detector import (
     normalize_kernel_actions,
     write_detection_log,
 )
+from .selinux_policy_classifier import (
+    CATEGORY_NOT_APPLICABLE,
+    CATEGORY_PCI,
+    CATEGORY_POLICY_CORRECT,
+    CATEGORY_TMM,
+    CATEGORY_TTLP,
+    classify_detection,
+    classify_stream,
+    context_type,
+    load_reference,
+    write_classification_log,
+)
 
 __all__ = [
     "DEFAULT_PERMISSION_MAP",
@@ -14,4 +26,14 @@ __all__ = [
     "detect_stream",
     "normalize_kernel_actions",
     "write_detection_log",
+    "CATEGORY_TMM",
+    "CATEGORY_TTLP",
+    "CATEGORY_PCI",
+    "CATEGORY_POLICY_CORRECT",
+    "CATEGORY_NOT_APPLICABLE",
+    "classify_detection",
+    "classify_stream",
+    "context_type",
+    "load_reference",
+    "write_classification_log",
 ]

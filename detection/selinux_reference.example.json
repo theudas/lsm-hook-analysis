@@ -1,0 +1,15 @@
+{
+  "file_contexts": [
+    {"pattern": "/workspace/outputs(/.*)?", "type": "workspace_output_t"},
+    {"pattern": "/var/www/html(/.*)?", "type": "httpd_sys_content_t"},
+    {"pattern": "/var/www/private(/.*)?", "type": "httpd_private_content_t"},
+    {"pattern": "/etc/shadow", "type": "shadow_t"}
+  ],
+  "expected_domains": {
+    "httpd": "httpd_t",
+    "nginx": "httpd_t"
+  },
+  "allow_rules": [
+    {"source": "httpd_t", "target": "httpd_sys_content_t", "class": "file", "perms": ["read", "open", "getattr"]}
+  ]
+}
