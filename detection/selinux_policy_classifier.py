@@ -260,13 +260,14 @@ def _fix_remove_allow(
 def _result(
     category: str,
     *,
+    direction: str = "allow",
     confidence: Optional[str] = None,
     observed: Optional[Dict[str, Any]] = None,
     expected: Optional[Dict[str, Any]] = None,
     evidence: Optional[List[str]] = None,
     recommended_fix: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    classification: Dict[str, Any] = {"category": category}
+    classification: Dict[str, Any] = {"category": category, "direction": direction}
     if confidence is not None:
         classification["confidence"] = confidence
     if observed is not None:

@@ -158,4 +158,4 @@ make
 - [docs/file_anomaly_detection_design.md](docs/file_anomaly_detection_design.md)
   file 关联结果异常检测（内核态访问是否超出用户态允许范围）
 - [docs/selinux_policy_classification_design.md](docs/selinux_policy_classification_design.md)
-  SELinux 策略异常分类（按 SPRT 三类 TMM/TTLP/PCI 归因并给出修复建议）
+  SELinux 策略异常分类（按 SPRT 三类 TMM/TTLP/PCI 归因，含 allow 与 deny 两个方向并给出修复建议）

@@ -19,6 +19,13 @@ from .selinux_policy_classifier import (
     load_reference,
     write_classification_log,
 )
+from .avc_deny_classifier import (
+    CATEGORY_MISSING_ALLOW,
+    CATEGORY_UNDETERMINED,
+    classify_avc_deny,
+    classify_avc_stream,
+    write_avc_classification_log,
+)
 
 __all__ = [
     "DEFAULT_PERMISSION_MAP",
@@ -36,4 +43,9 @@ __all__ = [
     "context_type",
     "load_reference",
     "write_classification_log",
+    "CATEGORY_MISSING_ALLOW",
+    "CATEGORY_UNDETERMINED",
+    "classify_avc_deny",
+    "classify_avc_stream",
+    "write_avc_classification_log",
 ]

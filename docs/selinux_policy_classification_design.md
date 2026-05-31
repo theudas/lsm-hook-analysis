@@ -10,7 +10,20 @@
 ```text
 detection/selinux_policy_classifier.py
 detection/test/test_selinux_policy_classifier.py
+detection/export_selinux_reference.py
+detection/test/test_export_selinux_reference.py
+detection/avc_deny_classifier.py
+detection/test/test_avc_deny_classifier.py
 ```
+
+本模块分两个方向：
+
+- **allow 方向**（§1–§9）：SELinux 放过了用户态不允许的访问（提权风险），由
+  `selinux_policy_classifier` 处理。
+- **deny 方向**（§10）：SELinux 拒绝了用户态本应允许的访问（可用性问题），由
+  `avc_deny_classifier` 处理。
+
+两个方向共用同一套形式化对应、参考知识库和决策树，只是触发条件相反、修复方向相反。
 
 ## 1. 背景与目标
 
@@ -86,6 +99,40 @@ SPRT 用 NLP 原型网络对 **CVE 描述文本** 做分类，因为它没有运
 - 缺省任意一张表都不会报错，只会让对应判定步骤跳过，并在无任何表时整体降级为启发式。
 
 知识库通过 `--reference <file.json>` 传入，或 `load_reference()` 读取。
+
+### 3.1 用导出脚本生成参考表
+
+`detection/export_selinux_reference.py` 是一个 **主机侧** helper，在被分析的 CentOS
+Stream 9 机器上运行，调用 `semanage` / `sesearch` 自动生成上述参考 JSON：
+
+```bash
+# 在目标主机上（需 root，需安装 policycoreutils-python-utils 与 setools-console）
+python3 -m detection.export_selinux_reference -o selinux_reference.json
+
+# 只导出关心的安全类的 allow 规则（默认 file,dir,lnk_file），减小体积
+python3 -m detection.export_selinux_reference --classes file,dir -o selinux_reference.json
+
+# 跳过 allow 规则导出（PCI 证据将缺少具体规则行，但 file_contexts/expected_domains 仍生成）
+python3 -m detection.export_selinux_reference --no-allow -o selinux_reference.json
+```
+
+三张表的来源命令与解析要点：
+
+| 表 | 来源命令 | 解析要点 |
+| --- | --- | --- |
+| `file_contexts` | `semanage fcontext -l` | 数据行是 3 列（2+ 空格分隔）；跳过表头、等价行、`<<none>>` |
+| `expected_domains` | `sesearch --type_trans` + `file_contexts` | 取 `process` 类转换的 exec type，经 file_contexts 反查 **字面路径**，basename（截断到 15 字符，与内核 comm 对齐）作为 comm |
+| `allow_rules` | `sesearch --allow -c <classes>` | 兼容花括号多权限与单权限两种形式 |
+
+`expected_domains` 的推导是 `r_t` 的化简近似，存在两点已知约束（脆弱的解析逻辑已抽成纯
+函数并单测覆盖，见 `test_export_selinux_reference.py`）：
+
+- 只接受 **字面路径** 的 exec type（含正则元字符的 pattern 无法稳定得到 comm，直接跳过）；
+- 同名 comm 指向不同域时整体丢弃，避免给出错误的高置信度结论。
+
+生成脚本与分类器之间是松耦合：脚本只产出 JSON，分类器只消费 JSON，两边都不依赖对方的内部
+实现，主机侧导出与离线分析可以分离。
+
 
 ## 4. 输入与输出
 
@@ -234,9 +281,108 @@ v1 暂不处理：
 
 - 完整的 `r_t` 解析（需要 exec type 与父域，当前用进程名近似）；
 - file 之外的安全类（`dir`/`process` 等）的精细化修复建议；
-- `semanage` / `sesearch` 输出到参考 JSON 的自动解析（当前由外部导出为 JSON 后传入）；
-- file_contexts 的完整 SELinux specificity 排序（v1 用 pattern 长度近似）；
-- AVC deny 方向（“该允许却被拒”）的归因。
+- file_contexts 的完整 SELinux specificity 排序（v1 用 pattern 长度近似）。
 
-这些可在后续输入字段更完整、或接入主机策略导出工具后扩展。
+> 参考表的导出已由 `export_selinux_reference.py` 实现（见 §3.1）。
+> AVC deny 方向（“该允许却被拒”）的归因已由 `avc_deny_classifier.py` 实现（见 §10）。
+
+## 10. AVC deny 方向归因
+
+allow 方向回答“SELinux 放过了不该放的访问”；deny 方向回答相反的问题：**SELinux 拒绝了
+用户态本应允许的访问**——这是可用性问题而非提权问题。由 `avc_deny_classifier` 处理。
+
+### 10.1 输入与数据约束
+
+deny 方向的数据来自 AVC deny 捕获通道（`lha_centos9_avc_capture.c`，仅在
+`sad->denied != 0` 时触发），用户态形态对应 `struct lha_avc_event_v1`：
+
+```json
+{
+  "scontext": "system_u:system_r:httpd_t:s0",
+  "tcontext": "system_u:object_r:default_t:s0",
+  "tclass": "file",
+  "perm": "open|read",
+  "comm": "httpd",
+  "permissive": 0,
+  "denied": 1
+}
 ```
+
+关键约束：**AVC deny 事件没有 path**，只有 `scontext`/`tcontext`/`tclass`/`perm`/
+`comm`。因此“被拒资源本应是什么 type”要靠 **关联到的用户态 policy** 提供：用
+policy 的 `normalized_prefix`（或去掉通配后的 `identifier`）反查 `file_contexts` 得到期望
+type。这比 allow 方向（有具体 path）要粗一些。
+
+输入是关联记录 `[user_file_policy, avc_event]`，`policy` 可为 `null`（未关联）。
+
+### 10.2 触发条件（与 allow 方向相反）
+
+只有 **落在用户态意图之内** 的 deny 才是异常：
+
+- `policy` 缺失 / 非 file allow 策略 → `not_applicable`（无法判断意图）；
+- 被拒动作（`perm` 归一化后）∩ `policy.actions` 为空 → `policy_correct`（用户本就没打算
+  允许，SELinux 拒得对）；
+- 被拒动作 ∩ `policy.actions` 非空 → 合法操作被误拒，进入归因。
+
+`permissive == 1` 时，该 deny 被审计但未强制执行（访问实际放行了）。仍照常归因，但在
+`evidence` 中给出“这预示 enforcing 模式下会失败”的预警。
+
+### 10.3 决策树与修复方向
+
+复用同一棵树（客体标签 → 主体域 → 规则），但修复方向相反：
+
+```text
+① T != 期望 type（file_contexts.lookup(prefix)）  →  TMM
+     客体标签错，导致合法访问被拒
+     修复：relabel 到期望 type（restorecon）
+
+② S != 期望域（expected_domains.lookup(comm)）     →  TTLP
+     进程在错误域里，缺少应有权限
+     修复：补/改 type_transition
+
+③ 标签都对，但 allow_rules 里没有授予该权限的规则  →  missing_allow
+     修复：新增 allow S T:C {P};（可借 audit2allow）
+
+   标签都对，且 allow 规则存在却仍被拒          →  undetermined
+     根因在三机制之外（boolean / MLS / 约束 / neverallow / 类型边界），
+     低置信度，不给确定修复，提示人工排查
+```
+
+deny 方向特有的两个类别：
+
+| 类别 | 含义 | 修复方向 |
+| --- | --- | --- |
+| `missing_allow` | 标签都对但缺 allow 规则 | **新增** allow 规则（对应 allow 方向 PCI 的反面） |
+| `undetermined` | 有 allow 规则却仍被拒 | 三机制无法解释，排查 boolean/MLS/约束 |
+
+无参考表时降级为启发式（`confidence = low`）：客体 type 为通用类型 → 猜 TMM；否则猜
+`missing_allow`。deny 方向 **不做 TTLP 启发式**——被拒的往往正是受限域，且没有参考表时无法
+判断进程“本应”在哪个域。
+
+### 10.4 输出
+
+与 allow 方向同构，`selinux_classification` 带 `direction: "deny"`：
+
+```json
+{
+  "category": "TMM | TTLP | missing_allow | undetermined | policy_correct | not_applicable",
+  "direction": "deny",
+  "confidence": "high | low",
+  "observed": {"S": "...", "T": "...", "C": "file", "P": ["read"], "comm": "...", "permissive": false},
+  "expected": {"T": "httpd_private_content_t"},
+  "evidence": ["..."],
+  "recommended_fix": {"kind": "relabel | type_transition | add_allow", "command": "..."}
+}
+```
+
+allow 方向的输出同样带 `direction: "allow"`，便于把两条流合并后按方向区分。
+
+### 10.5 命令行用法
+
+```bash
+python3 -m detection.avc_deny_classifier avc_deny_records.ndjson \
+    -r selinux_reference.json \
+    -o avc_deny_classification_events.ndjson
+```
+
+输入是 `[policy, avc_event]` 的 NDJSON，输出在每行追加 `selinux_classification`。
