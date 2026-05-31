@@ -253,6 +253,18 @@ class ClassifyNonViolationTest(unittest.TestCase):
         result = classify_detection(["not", "a", "detection"], reference=None)
         self.assertEqual(result["selinux_classification"]["category"], CATEGORY_NOT_APPLICABLE)
 
+    def test_permissive_runtime_allow_but_policy_deny_is_policy_correct(self):
+        # 覆盖 permissive 模式：runtime_result=allow 但 policy_result=deny，
+        # 说明策略其实拒绝了（只是 permissive 未强制执行），不应归因为策略错误。
+        event = make_event(request_perm="exec")
+        event["result"]["runtime_result"] = "allow"
+        event["result"]["policy_result"] = "deny"
+        result = classify_detection(detection_for(make_policy(), event), reference=None)
+
+        cls = result["selinux_classification"]
+        self.assertEqual(cls["category"], CATEGORY_POLICY_CORRECT)
+        self.assertTrue(any("permissive" in e for e in cls["evidence"]))
+
 
 class ClassifyStreamTest(unittest.TestCase):
     def test_stream_handles_bad_json(self):

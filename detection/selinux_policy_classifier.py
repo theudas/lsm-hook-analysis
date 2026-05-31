@@ -320,6 +320,23 @@ def classify_detection(
     record = detection_result.get("input")
     event = record[1] if isinstance(record, list) and len(record) > 1 else None
 
+    # The detector statuses key on runtime_result, but runtime_result is always
+    # "allow" under permissive mode.  The actual SELinux *policy* verdict lives
+    # in policy_result.  If the policy decided deny, the over-reach was not
+    # really permitted -- a runtime allow here just means permissive mode -- so
+    # the policy is correct and there is nothing to attribute.
+    policy_result = _get_path(event, ("result", "policy_result"))
+    if policy_result == "deny":
+        detection_result["selinux_classification"] = _result(
+            CATEGORY_POLICY_CORRECT,
+            evidence=[
+                "SELinux policy_result is deny; the policy did not permit this "
+                "access. A runtime 'allow' indicates permissive mode, not a "
+                "policy error (in enforcing mode the access would be blocked)."
+            ],
+        )
+        return detection_result
+
     scontext = _get_path(event, ("subject", "scontext"))
     tcontext = _get_path(event, ("target", "tcontext"))
     comm = _get_path(event, ("subject", "comm"))

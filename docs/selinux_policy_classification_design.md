@@ -193,11 +193,16 @@ python3 -m detection.export_selinux_reference --no-allow -o selinux_reference.js
 ## 5. 判定决策树
 
 仅对 `detection.status ∈ {permission_exceeded, resource_out_of_scope}` 的记录归因（这些
-都隐含 `runtime_result == allow`，即 SELinux 放行了越权访问）。其余情况：
+都隐含 `runtime_result == allow`，即越权行为在运行时确实发生了）。其余情况：
 
-- `blocked_violation_attempt`（内核已 deny）→ `policy_correct`，策略本身正确，无需调整；
+- `blocked_violation_attempt`（运行时已 deny）→ `policy_correct`，策略本身正确，无需调整；
 - `normal` / `invalid_input` / `unsupported_policy` / `runtime_error` 及非法对象 →
   `not_applicable`。
+
+**步骤 ⓪（甄别 permissive 假象）**：`runtime_result` 在 permissive 模式下恒为 `allow`，并不
+代表策略真的放行。因此归因前先看 `result.policy_result`——若为 `deny`，说明策略其实拒绝了
+这次访问（只是 permissive 未强制执行），直接判 `policy_correct`，不进入下面的归因。只有
+`policy_result` 为 `inferred_allow`（或 `unknown`）时才继续，此时才是策略真正放行了越权。
 
 对需要归因的记录，按“哪一环偏离期望”分类，**顺序固定为 客体标签 → 主体域 → 规则**：
 
