@@ -157,6 +157,8 @@ make
   AVC capture 模块详细说明
 - [docs/detection_principle_overview.md](docs/detection_principle_overview.md)
   检测原理总览：从数据来源到判定 SELinux 策略有误的完整链路（建议先读）
+- [docs/selinux_detection_slides.md](docs/selinux_detection_slides.md)
+  SELinux 异常检测原理的 Marp 幻灯片（`marp docs/selinux_detection_slides.md -o slides.html`）
 - [docs/file_anomaly_detection_design.md](docs/file_anomaly_detection_design.md)
   file 关联结果异常检测（内核态访问是否超出用户态允许范围）
 - [docs/selinux_policy_classification_design.md](docs/selinux_policy_classification_design.md)
